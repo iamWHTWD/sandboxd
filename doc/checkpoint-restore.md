@@ -226,8 +226,10 @@ serializes virtiofsd into `virtiofs.state`, collects the shared vhost dirty
 bitmap, and includes those guest-memory ranges in every snapshot flavor before
 re-enabling the queues. Restore requires the same virtio-fs/non-virtio-fs
 storage layout, starts a replacement virtiofsd over the newly prepared
-read-only exports, loads its sidecar before enabling queues, and resumes the
+exports with their requested access modes, loads its sidecar before enabling queues, and resumes the
 guest only after the device and memory state agree.
+
+Writable host directory mounts are external, caller-owned state. Local restore requires the same mount layout and access modes and the original backing directories and referenced files. The checkpoint does not copy, roll back, or retain their contents; sandbox deletion only tears down the export and does not delete the source. Keep those files available for as long as checkpoints may need them. Restoring into an empty replacement directory, automatically creating new log segments, and cross-node migration of writable host directories are not supported. For append logs, use `O_APPEND`; ordinary writes retain the saved offset and can overwrite data written after the checkpoint. Replayed application execution can produce duplicate logs even with append mode. The virtiofsd export uses its default write-through policy, not `--writeback`.
 
 Firecracker native writable mounts do not add checkpoint components. Their
 directories reside in the same `overlay.ext4` as the root overlay's upper and

@@ -70,11 +70,7 @@ Run the complete runtime compatibility suite on a nested-KVM host with:
 make e2e-runtime-suite
 ```
 
-The suite builds the project binaries once, assembles targeted runtime images,
-and tests runsc with systrap, runsc with KVM, Kata, Firecracker, and runc. CI
-passes those binaries to five independent matrix jobs. Keep the gVisor TAP
-contract, network ACL cases, and AKernel's shared manifest consumer in sync
-when changing this path.
+The suite builds the project binaries once, assembles targeted runtime images, and tests runsc with systrap, runsc with KVM, Kata, Firecracker, and runc. CI passes those binaries to seven independent matrix jobs. Both runsc platforms run the shared writable host-mount C/R regression. The Firecracker virtio-fs job runs it with EROFS and directory roots, using the manifest-pinned virtiofsd source; the full and incremental non-virtio-fs jobs remain separate. Keep the gVisor TAP contract, network ACL cases, and AKernel's shared manifest consumer in sync when changing this path.
 
 # Checkpoint and Restore Contract
 

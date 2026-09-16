@@ -2,9 +2,9 @@
 
 The privileged E2E flows validate the public runsc, runc, Kata Containers, and
 Firecracker adapters without an AKernel node image. CI compiles the
-project-owned binaries once and passes them to five matrix jobs. Each job
+project-owned binaries once and passes them to seven matrix jobs. Each job
 downloads its checksum-pinned runtime payload, builds a targeted image, and
-runs runsc-systrap, runsc-kvm, Kata, Firecracker, or runc independently.
+runs runsc-systrap, runsc-kvm, Kata, Firecracker (full, incremental, and virtio-fs), or runc independently.
 
 ## Coverage
 
@@ -80,6 +80,8 @@ E2E_CASE=runsc-systrap make e2e-runtime-case
 E2E_CASE=runsc-kvm make e2e-runtime-case
 E2E_CASE=kata make e2e-runtime-case
 E2E_CASE=firecracker make e2e-runtime-case
+E2E_CASE=firecracker-incremental make e2e-runtime-case
+E2E_CASE=firecracker-virtiofs make e2e-runtime-case
 E2E_CASE=runc make e2e-runtime-case
 ```
 
@@ -139,13 +141,16 @@ the main lifecycle and checkpoint/restore paths. It also checks the
 filestore data there. The keep flag retains that fixture and prints its exact
 path; the default remains automatic cleanup.
 
-For writable host directories, run `test/e2e/firecracker-rw.sh` inside an existing node with virtio-fs enabled and both `sbox` and the `checkpoint-restore` test client on `PATH`. Set `ROOTFS` to a usable EROFS image or directory root and `TEST_DIR` to a new absolute directory visible at the same path to sandboxd and the test process. The test checks mixed RO/RW mounts, host/guest visibility, file operations, rotation of an open append FD, local checkpoint/delete/restore, saved memory and read offsets, and source retention after deletion. It leaves caller-owned directories and checkpoints for inspection. Repeat with both root types, using different test directories. `KEEP_RUNNING=1` retains the restored sandbox for an additional daemon crash/recovery check.
+The `runsc-systrap` and `runsc-kvm` CI jobs automatically run the shared writable host-directory regression. The `firecracker-virtiofs` job runs it with both EROFS and directory roots, building virtiofsd from the revision pinned in `third_party/runtime-versions.env`. The regular Firecracker jobs retain their non-virtio-fs coverage. Each regression failure fails the runtime job.
+
+For manual runs, use `test/e2e/host-mount-rw.sh` inside an existing node with `RUNTIME=runsc` or `RUNTIME=firecracker` (the default). Firecracker requires virtio-fs enabled. Have both `sbox` and the `checkpoint-restore` test client on `PATH`. Set `ROOTFS` to a usable EROFS image or directory root and `TEST_DIR` to a new absolute directory visible at the same path to sandboxd and the test process. The test checks mixed RO/RW mounts, host/guest visibility, file operations, rotation of an open append FD, local checkpoint/delete/restore, saved memory and read offsets, and source retention after deletion. It leaves caller-owned directories and checkpoints for inspection. Repeat with both root types, using different test directories. `KEEP_RUNNING=1` retains the restored sandbox for an additional daemon crash/recovery check.
 
 ```bash
 ROOTFS=/path/to/root.erofs \
 TEST_DIR=/path/to/new-test-directory \
-CASE_ID=firecracker-rw \
-bash test/e2e/firecracker-rw.sh
+RUNTIME=runsc \
+CASE_ID=runsc-rw \
+bash test/e2e/host-mount-rw.sh
 ```
 
 `KATA_ROOT` must contain the runtime-rs shim, Dragonball configuration,

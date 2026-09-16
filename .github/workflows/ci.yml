@@ -147,6 +147,8 @@ jobs:
           - name: firecracker-incremental
             needs_kvm: true
             checkpoint_mode: incremental
+          - name: firecracker-virtiofs
+            needs_kvm: true
           - name: runc
             needs_kvm: false
 

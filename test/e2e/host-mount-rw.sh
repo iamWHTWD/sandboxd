@@ -9,7 +9,12 @@ set -Eeuo pipefail
 : "${TEST_DIR:?set TEST_DIR to a new absolute directory visible to sandboxd}"
 : "${ROOTFS:?set ROOTFS to an EROFS image or directory root}"
 SOCKET="${SOCKET:-/run/sandboxd/sandboxd.sock}"
-CASE_ID="${CASE_ID:-fc-rw}"
+RUNTIME="${RUNTIME:-firecracker}"
+case "${RUNTIME}" in
+    runsc|firecracker) ;;
+    *) echo "unsupported runtime: ${RUNTIME}" >&2; exit 1 ;;
+esac
+CASE_ID="${CASE_ID:-${RUNTIME}-rw}"
 SOURCE_ID="sbox-${CASE_ID}-source"
 TARGET_ID="sbox-${CASE_ID}-restored"
 mkdir "${TEST_DIR}"
@@ -21,12 +26,16 @@ sbox_cmd() { sbox --address "${SOCKET}" --timeout 60s "$@"; }
 helper() { checkpoint-restore --socket "${SOCKET}" "$@"; }
 guest() { sbox_cmd exec "${TARGET_ID}" /bin/sh -c "$1"; }
 cleanup() {
-    sbox_cmd delete "${SOURCE_ID}" >/dev/null 2>&1 || true
-    if [ "${KEEP_RUNNING:-0}" != 1 ]; then
-        sbox_cmd delete "${TARGET_ID}" >/dev/null 2>&1 || true
+    local status=$?
+    trap - EXIT
+    sbox_cmd delete "${SOURCE_ID}" || status=1
+    if [ "${KEEP_RUNNING:-0}" != 1 ] || [ "${status}" != 0 ]; then
+        sbox_cmd delete "${TARGET_ID}" || status=1
     fi
+    exit "${status}"
 }
 trap cleanup EXIT
+trap 'echo "ERROR: ${CASE_ID} failed at line ${LINENO}" >&2' ERR
 
 workload='set -eu
 echo started >> /app/logs/starts
@@ -44,14 +53,14 @@ printf "%s|%s|%s\n" "$marker" "$first" "$second" >&3
 echo resumed > /var/rw-resumed
 while :; do sleep 1; done'
 
-helper --action start --runtime firecracker --rootfs "${ROOTFS}" \
+helper --action start --runtime "${RUNTIME}" --rootfs "${ROOTFS}" \
     --sandbox-id "${SOURCE_ID}" --request-file "${TEST_DIR}/request.json" \
     --memory-mb 256 --cpu 1000 --storage-mb 64 \
     --mount "${TEST_DIR}/rw:/app/logs:bind:rbind,rw" \
     --mount "${TEST_DIR}/ro:/readonly:bind:rbind,ro" \
     --workload-cmd "${workload}"
 sbox_cmd exec "${SOURCE_ID}" /bin/sh -c \
-    'i=0; until test -f /var/rw-ready; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
+    'set -eu; i=0; until test -f /var/rw-ready; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
 
 # Host sees guest writes before checkpoint, including rotation of an open FD.
 test "$(cat "${TEST_DIR}/rw/rotated.log")" = before-checkpoint
@@ -65,7 +74,7 @@ printf 'host-to-guest\n' > "${TEST_DIR}/rw/host-input"
 helper --action restore --target-id "${TARGET_ID}" \
     --request-file "${TEST_DIR}/request.json" --checkpoint-dir "${TEST_DIR}/checkpoint"
 printf 'go\n' > "${TEST_DIR}/rw/proceed"
-guest 'i=0; until test -f /var/rw-resumed; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
+guest 'set -eu; i=0; until test -f /var/rw-resumed; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
 test "$(cat "${TEST_DIR}/rw/rotated.log")" = "$(printf 'before-checkpoint\nhost-after-checkpoint\nmemory-preserved|first|second')"
 test "$(wc -l < "${TEST_DIR}/rw/starts")" -eq 1
 test ! -s "${TEST_DIR}/rw/active.log"

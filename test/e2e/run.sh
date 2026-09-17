@@ -397,6 +397,9 @@ if [ "${E2E_SKIP_BUILD}" = "0" ]; then
         GOMODCACHE=/tmp/go-mod-official GOTOOLCHAIN=auto \
         go build -o output/network-policy-client \
         ./test/e2e/network-policy-client
+    CGO_ENABLED=0 GOWORK=off GOCACHE=/tmp/go-build \
+        GOMODCACHE=/tmp/go-mod-official GOTOOLCHAIN=auto \
+        go build -o output/checkpoint-restore ./test/e2e/checkpoint-restore
 
     DOCKERFILE="test/e2e/Dockerfile"
     if [ "${E2E_RUNTIME}" = "all" ] || [ "${E2E_RUNTIME}" = "runsc" ]; then
@@ -426,10 +429,6 @@ if [ "${E2E_SKIP_BUILD}" = "0" ]; then
         install -m 0644 "${FIRECRACKER_INITRD}" output/firecracker-initrd.img
         if [ "${E2E_FIRECRACKER_VIRTIOFS}" = "1" ]; then
             DOCKERFILE="test/e2e/firecracker-virtiofs.Dockerfile"
-            CGO_ENABLED=0 GOWORK=off GOCACHE=/tmp/go-build \
-                GOMODCACHE=/tmp/go-mod-official GOTOOLCHAIN=auto \
-                go build -o output/checkpoint-restore \
-                ./test/e2e/checkpoint-restore
             install -m 0755 "${FIRECRACKER_VIRTIOFSD}" output/virtiofsd
         fi
     fi

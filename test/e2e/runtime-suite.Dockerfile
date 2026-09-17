@@ -12,6 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+ARG E2E_VIRTIOFS=0
+
+# Match the source and locked dependencies used by AKernel's node image.
+FROM rust:1.90.0-bookworm AS virtiofsd-builder
+ARG VIRTIOFSD_REVISION
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates git libcap-ng-dev libseccomp-dev pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /src/virtiofsd
+RUN git init && \
+    git fetch --depth=1 https://gitlab.com/virtio-fs/virtiofsd.git "${VIRTIOFSD_REVISION}" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "${VIRTIOFSD_REVISION}" && \
+    cargo build --release --locked
+
+FROM ubuntu:24.04 AS virtiofsd-0
+RUN mkdir -p /virtiofsd
+
+FROM ubuntu:24.04 AS virtiofsd-1
+COPY --from=virtiofsd-builder /src/virtiofsd/target/release/virtiofsd /virtiofsd/usr/local/bin/virtiofsd
+
+FROM virtiofsd-${E2E_VIRTIOFS} AS virtiofsd-runtime
+
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -31,6 +55,7 @@ RUN apt-get update && \
         iputils-ping \
         jq \
         kmod \
+        libcap-ng0 \
         libseccomp2 \
         mount \
         netcat-openbsd \
@@ -52,6 +77,8 @@ COPY output/oom-hog /usr/local/bin/oom-hog
 COPY output/network-policy-client /usr/local/bin/network-policy-client
 COPY output/checkpoint-restore /usr/local/bin/checkpoint-restore
 COPY test/e2e/e2e-run.sh /usr/local/bin/sandboxd-e2e-run
+COPY test/e2e/host-mount-rw.sh /usr/local/bin/sandboxd-host-mount-rw
+COPY --from=virtiofsd-runtime /virtiofsd/ /
 
 ARG E2E_RUNTIME
 ARG GVISOR_RELEASE

@@ -70,11 +70,7 @@ Run the complete runtime compatibility suite on a nested-KVM host with:
 make e2e-runtime-suite
 ```
 
-The suite builds the project binaries once, assembles targeted runtime images,
-and tests runsc with systrap, runsc with KVM, Kata, Firecracker, and runc. CI
-passes those binaries to five independent matrix jobs. Keep the gVisor TAP
-contract, network ACL cases, and AKernel's shared manifest consumer in sync
-when changing this path.
+The suite builds the project binaries once, assembles targeted runtime images, and tests runsc with systrap, runsc with KVM, Kata, Firecracker, and runc. CI passes those binaries to seven independent matrix jobs. Both runsc platforms run the shared writable host-mount C/R regression. The Firecracker virtio-fs job runs it with EROFS and directory roots, using the manifest-pinned virtiofsd source; the full and incremental non-virtio-fs jobs remain separate. Keep the gVisor TAP contract, network ACL cases, and AKernel's shared manifest consumer in sync when changing this path.
 
 # Checkpoint and Restore Contract
 
@@ -85,10 +81,6 @@ stays synchronized with the implementation.
 
 # Firecracker Storage Contract
 
-The Firecracker adapter uses local or image-provider-backed regular EROFS files by default. An operator may instead enable the migration-capable, read-only virtio-fs path with `plugin.runtime.firecracker.virtiofs_enabled`; that path accepts directory root filesystems and explicitly read-only host directory mounts and exports them through one sandbox-scoped virtiofsd. OCI and Nydus root filesystems require virtio-fs and are consumed directly from the directory mounted by the image manager; never eagerly materialize those directories as EROFS. OCI image mounts remain unsupported by Firecracker.
+The Firecracker adapter uses local or image-provider-backed regular EROFS files by default. An operator may enable virtio-fs with `plugin.runtime.firecracker.virtiofs_enabled`; that path accepts directory root filesystems and explicitly `ro` or `rw` host directory mounts through one sandbox-scoped virtiofsd. Root image exports always remain read-only, enforced recursively on host staging mounts with `mount_setattr` (Linux 5.12+). The staging root is read-only and virtiofsd writeback caching remains disabled. OCI and Nydus root filesystems require virtio-fs and are consumed directly from the image manager; never eagerly materialize them as EROFS. OCI image mounts remain unsupported.
 
-Per-sandbox Firecracker storage is limited to the private ext4 writable layer,
-virtio-fs staging and restored live-memory files, and runtime state. Every
-virtio-fs export must remain read-only; never extend this path to writable host
-sharing. Bounded read-only regular-file injection remains a separate
-startup-metadata mechanism for files such as `resolv.conf`.
+Per-sandbox managed storage comprises the private ext4 writable layer, virtio-fs staging and restored live-memory files, and runtime state. Host directory binds remain caller-owned: deleting a sandbox never deletes their contents, and `storage_mb` does not bound them. Writable host mounts support local checkpoint/restore only while the original backing directories and referenced files remain available; their contents are not snapshotted or rolled back. Do not recreate missing files or imply cross-node portability or automatic new log segments. Bounded read-only regular-file injection remains a separate startup-metadata mechanism for files such as `resolv.conf`.

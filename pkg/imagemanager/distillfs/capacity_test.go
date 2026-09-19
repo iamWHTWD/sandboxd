@@ -55,9 +55,12 @@ func TestChunkDBCapacityArguments(t *testing.T) {
 
 // Run in a private mount namespace with /dev/fuse and mkfs.erofs available.
 func TestChunkDBCapacityIntegration(t *testing.T) {
-	bin := os.Getenv("DISTILL_FS_TEST_BINARY")
+	if os.Getenv("SANDBOXD_RUN_DISTILLFS_INTEGRATION") != "1" {
+		t.Skip("run make distillfs-test for privileged integration")
+	}
+	bin := os.Getenv("DISTILL_FS_BINARY")
 	if bin == "" {
-		t.Skip("set DISTILL_FS_TEST_BINARY for privileged integration")
+		t.Fatal("DISTILL_FS_BINARY must point to the distill-fs release binary")
 	}
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

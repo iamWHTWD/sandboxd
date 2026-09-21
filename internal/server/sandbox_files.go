@@ -110,6 +110,7 @@ func (h *sandboxService) prepareSandboxFiles(
 	defaults svc.SandboxDefaults,
 	networkIP net.IP,
 	aclEnabled bool,
+	writableHosts bool,
 	mounts []*runtime.Mount,
 	imageProcess *imageProcessSpec,
 	imageProcessTarget string,
@@ -166,14 +167,14 @@ func (h *sandboxService) prepareSandboxFiles(
 		if err := atomicWriteSandboxFile(source, []byte(content)); err != nil {
 			return nil, fmt.Errorf("write sandbox hosts: %w", err)
 		}
-		prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/hosts", source))
+		prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/hosts", source, !writableHosts))
 	}
 	if needsHostname {
 		source := filepath.Join(root, "hostname")
 		if err := atomicWriteSandboxFile(source, []byte(hostname+"\n")); err != nil {
 			return nil, fmt.Errorf("write sandbox hostname: %w", err)
 		}
-		prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/hostname", source))
+		prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/hostname", source, true))
 	}
 	if needsResolver {
 		resolver := h.config.ResolvConfPath
@@ -188,7 +189,7 @@ func (h *sandboxService) prepareSandboxFiles(
 			return nil, fmt.Errorf("resolver source %s is not a regular file", resolver)
 		}
 		if !aclEnabled {
-			prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/resolv.conf", resolver))
+			prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/resolv.conf", resolver, true))
 		} else {
 			if h.interfaceMgr == nil || h.interfaceMgr.BridgeIp.To4() == nil {
 				return nil, fmt.Errorf("sandbox bridge IPv4 address is required for managed DNS")
@@ -201,7 +202,7 @@ func (h *sandboxService) prepareSandboxFiles(
 			if err := atomicWriteSandboxFile(source, content); err != nil {
 				return nil, fmt.Errorf("write managed resolver: %w", err)
 			}
-			prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/resolv.conf", source))
+			prepared.mounts = append(prepared.mounts, sandboxFileMount("/etc/resolv.conf", source, true))
 		}
 	}
 	if imageProcess != nil {
@@ -213,7 +214,7 @@ func (h *sandboxService) prepareSandboxFiles(
 		if err := atomicWriteSandboxFile(source, content); err != nil {
 			return nil, fmt.Errorf("write image process config: %w", err)
 		}
-		prepared.mounts = append(prepared.mounts, sandboxFileMount(imageProcessTarget, source))
+		prepared.mounts = append(prepared.mounts, sandboxFileMount(imageProcessTarget, source, true))
 	}
 	failed = false
 	return prepared, nil
@@ -303,11 +304,18 @@ func mountDestinationsOwn(destinations []string, target string) bool {
 	return false
 }
 
-func sandboxFileMount(destination, source string) *runtime.Mount {
+// sandboxFileMount builds a bind mount for a sandbox-managed file. Only
+// /etc/hosts may pass readOnly=false (AKernel issue #71): resolver, hostname,
+// and managed image-process files stay read-only.
+func sandboxFileMount(destination, source string, readOnly bool) *runtime.Mount {
+	options := []string{"bind"}
+	if readOnly {
+		options = append(options, "ro")
+	}
 	return &runtime.Mount{
 		Target:  destination,
 		Type:    "bind",
-		Options: []string{"bind", "ro"},
+		Options: options,
 		Source:  &runtime.Mount_HostPath{HostPath: source},
 	}
 }

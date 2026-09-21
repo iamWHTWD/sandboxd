@@ -85,6 +85,11 @@ type RuntimeConfig struct {
 	// final configuration does not already provide /etc/resolv.conf.
 	ResolvConfPath string `toml:"resolv_conf_path" json:"resolvConfPath"`
 
+	// WritableHosts mounts the sandbox-generated /etc/hosts read-write so root
+	// inside the sandbox can append local service aliases at runtime (AKernel
+	// issue #71). /etc/hostname and /etc/resolv.conf stay read-only regardless.
+	WritableHosts bool `toml:"writable_hosts" json:"writableHosts"`
+
 	// Runsc configures the gVisor runtime adapter.
 	Runsc RunscConfig `toml:"runsc" json:"runsc"`
 

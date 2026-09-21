@@ -1681,6 +1681,102 @@ run_storage_quota_check() {
     SANDBOX_ID=""
 }
 
+# run_writable_hosts_checks exercises opt-in writable /etc/hosts on a real
+# runtime (issue #71): append an alias, resolve it, verify isolation from
+# another sandbox and from the node, and confirm managed files stay
+# read-only.
+run_writable_hosts_checks() {
+    local runtime="$1" label="$2" rootfs="$3"
+    log "testing writable /etc/hosts on ${label}"
+    local node_hosts_before
+    node_hosts_before="$(md5sum /etc/hosts)"
+
+    local writable_id
+    writable_id="$(sbox_cmd start \
+        --quiet \
+        --runtime "${runtime}" \
+        --sandbox-id "sbox-e2e-${label}-hosts" \
+        --rootfs "${rootfs}" \
+        --cwd / \
+        --writable-hosts \
+        --cpu-millicores 100 \
+        --memory-mb 128 \
+        /bin/sleep 300)"
+    wait_for_state "${writable_id}" "SANDBOX_STATE_RUNNING"
+
+    # Default stays read-only: the managed files reject writes, and a second
+    # sandbox without the opt-in cannot write its hosts either.
+    sbox_cmd exec "${writable_id}" /bin/sh -c \
+        'echo "127.0.0.1 tb4-local-service" >> /etc/hosts'
+    local got
+    got="$(sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'grep tb4-local-service /etc/hosts')"
+    assert_eq "${got}" "127.0.0.1 tb4-local-service" "${label} hosts append"
+    got="$(sbox_cmd exec "${writable_id}" /bin/ping -c 1 -W 2 tb4-local-service 2>&1)"
+    grep -q "127.0.0.1" <<<"${got}" ||
+        fail "${label} appended alias does not resolve to 127.0.0.1: ${got}"
+
+    if sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'echo x >> /etc/resolv.conf' 2>/dev/null; then
+        fail "${label} resolver became writable"
+    fi
+    if sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'echo x >> /etc/hostname' 2>/dev/null; then
+        fail "${label} hostname became writable"
+    fi
+
+    local other_id
+    other_id="$(sbox_cmd start \
+        --quiet \
+        --runtime "${runtime}" \
+        --sandbox-id "sbox-e2e-${label}-hosts-ro" \
+        --rootfs "${rootfs}" \
+        --cwd / \
+        --cpu-millicores 100 \
+        --memory-mb 128 \
+        /bin/sleep 300)"
+    wait_for_state "${other_id}" "SANDBOX_STATE_RUNNING"
+    if sbox_cmd exec "${other_id}" /bin/sh \
+        -c 'echo y >> /etc/hosts' 2>/dev/null; then
+        fail "${label} default hosts mount is writable"
+    fi
+    if sbox_cmd exec "${other_id}" /bin/sh \
+        -c 'grep tb4-local-service /etc/hosts' 2>/dev/null; then
+        fail "${label} hosts alias leaked into another sandbox"
+    fi
+
+    sbox_cmd delete "${writable_id}"
+    sbox_cmd delete "${other_id}"
+
+    assert_eq "${node_hosts_before}" "$(md5sum /etc/hosts)" \
+        "${label} node hosts file changed"
+    log "writable /etc/hosts checks passed on ${label}"
+}
+
+# run_writable_hosts_firecracker_rejection verifies the capability gate:
+# firecracker rejects writable-hosts starts with a clear error instead of
+# failing deep inside storage preparation.
+run_writable_hosts_firecracker_rejection() {
+    log "testing writable /etc/hosts rejection on firecracker"
+    local rootfs="$1"
+    if sbox_cmd start \
+        --quiet \
+        --runtime firecracker \
+        --sandbox-id sbox-e2e-fc-hosts-reject \
+        --rootfs "${rootfs}" \
+        --cwd / \
+        --writable-hosts \
+        --cpu-millicores 100 \
+        --memory-mb 128 \
+        /bin/sleep 300 >/tmp/fc-hosts-reject.log 2>&1; then
+        fail "firecracker accepted writable-hosts start"
+    fi
+    grep -q "writable /etc/hosts is not supported" \
+        /tmp/fc-hosts-reject.log ||
+        fail "firecracker rejection message is missing: $(cat /tmp/fc-hosts-reject.log)"
+    log "firecracker writable-hosts rejection passed"
+}
+
 run_runc_checks() {
     log "testing runc directory rootfs, KVM injection, and recovery"
     SANDBOX_ID="$(sbox_cmd start \
@@ -2330,10 +2426,22 @@ run_e2e() {
                 run_runsc_checks
                 run_runc_checks
                 ;;
-            runsc) run_runsc_checks ;;
-            runc) run_runc_checks ;;
-            kata) run_kata_checks ;;
-            firecracker) run_firecracker_checks ;;
+            runsc)
+                run_runsc_checks
+                run_writable_hosts_checks runsc runsc "${ROOTFS}"
+                ;;
+            runc)
+                run_runc_checks
+                run_writable_hosts_checks runc runc "${ROOTFS}"
+                ;;
+            kata)
+                run_kata_checks
+                run_writable_hosts_checks kata kata "${ROOTFS}"
+                ;;
+            firecracker)
+                run_firecracker_checks
+                run_writable_hosts_firecracker_rejection "${ROOTFS}"
+                ;;
         esac
         if [ "${NETWORK_SOAK}" = "1" ]; then
             run_network_soak "${E2E_RUNTIME}"

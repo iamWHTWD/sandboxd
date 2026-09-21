@@ -87,7 +87,9 @@ type RuntimeConfig struct {
 
 	// WritableHosts mounts the sandbox-generated /etc/hosts read-write so root
 	// inside the sandbox can append local service aliases at runtime (AKernel
-	// issue #71). /etc/hostname and /etc/resolv.conf stay read-only regardless.
+	// issue #71). OR-combined with the typed StartRequest.writable_hosts
+	// field. /etc/hostname and /etc/resolv.conf stay read-only regardless,
+	// and the firecracker runtime rejects writable-hosts starts.
 	WritableHosts bool `toml:"writable_hosts" json:"writableHosts"`
 
 	// Runsc configures the gVisor runtime adapter.

@@ -303,6 +303,65 @@ func TestStartRejectsXPUForUnsupportedRuntimes(t *testing.T) {
 	}
 }
 
+func TestStartRejectsWritableHostsForFirecracker(t *testing.T) {
+	s := newTestService(t, map[string]svc.Handler{
+		config.RuntimeNameFirecracker: svc.NewFakeRuntimeHandler(),
+	})
+	response, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime:       config.RuntimeNameFirecracker,
+		Rootfs:        &runtime.RootfsConfig{},
+		WritableHosts: true,
+	})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, response.Message, "writable /etc/hosts is not supported")
+}
+
+func TestStartRejectsFirecrackerWhenStaticWritableHostsEnabled(t *testing.T) {
+	s := newTestService(t, map[string]svc.Handler{
+		config.RuntimeNameFirecracker: svc.NewFakeRuntimeHandler(),
+	})
+	s.config.PluginConfig.RuntimeConfig.WritableHosts = true
+	response, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime: config.RuntimeNameFirecracker,
+		Rootfs:  &runtime.RootfsConfig{},
+	})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, response.Message, "writable /etc/hosts is not supported")
+}
+
+// TestStartWritableHostsNotRejectedByGate probes that a writable-hosts
+// request for a kernel-backed runtime passes the capability gate and only
+// fails later in resource preparation, which this harness does not
+// configure. End-to-end behavior for these runtimes is covered by the
+// runtime E2E suite.
+func TestStartWritableHostsNotRejectedByGate(t *testing.T) {
+	for _, runtimeName := range []string{
+		config.RuntimeNameRunsc,
+		config.RuntimeNameRunc,
+		config.RuntimeNameKata,
+	} {
+		t.Run(runtimeName, func(t *testing.T) {
+			s := newTestService(t, map[string]svc.Handler{
+				runtimeName: svc.NewFakeRuntimeHandler(),
+			})
+			response, err := s.Start(context.Background(), &runtime.StartRequest{
+				Runtime:       runtimeName,
+				Rootfs:        &runtime.RootfsConfig{},
+				WritableHosts: true,
+			})
+			if err == nil && response.Code == 0 {
+				return // fully wired fake; gate passed
+			}
+			msg := response.GetMessage()
+			if err != nil && msg == "" {
+				msg = err.Error()
+			}
+			assert.NotContains(t, msg, "writable /etc/hosts")
+			assert.NotEqual(t, codes.FailedPrecondition, status.Code(err))
+		})
+	}
+}
+
 func TestStartRejectsEnableKVMForRunsc(t *testing.T) {
 	s := newTestService(t, map[string]svc.Handler{
 		config.RuntimeNameRunsc: svc.NewFakeRuntimeHandler(),

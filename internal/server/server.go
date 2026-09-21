@@ -1064,10 +1064,6 @@ func resourcesToLinux(
 	return res
 }
 
-func startReqEnvValue(req *runtime.StartRequest, key string) bool {
-	return req != nil && req.Envs[key] == "true"
-}
-
 type ExtraConfig struct {
 	// NetworkStack selects the in-sandbox network stack. The open-source runsc
 	// adapter supports gVisor netstack only; empty is treated as netstack.
@@ -1110,6 +1106,16 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 	}
 	if startReq.Runtime == "" {
 		startReq.Runtime = config.RuntimeNameRunsc
+	}
+	writableHosts := h.config.PluginConfig.RuntimeConfig.WritableHosts ||
+		startReq.WritableHosts
+	if writableHosts && startReq.Runtime == config.RuntimeNameFirecracker {
+		err := fmt.Errorf(
+			"writable /etc/hosts is not supported by runtime %s",
+			config.RuntimeNameFirecracker,
+		)
+		return &runtime.StartResponse{Code: -1, Message: err.Error()},
+			errord.ToGRPC(fmt.Errorf("%v: %w", err, errord.ErrFailedPrecondition))
 	}
 	networkPolicy, err := networkacl.NormalizePolicy(startReq.NetworkPolicy)
 	if err != nil {
@@ -1481,8 +1487,6 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		}
 		aclRegistered = true
 	}
-	writableHosts := h.config.PluginConfig.RuntimeConfig.WritableHosts ||
-		startReqEnvValue(startReq, config.WritableHostsEnvKey)
 	sandboxFiles, err = h.prepareSandboxFiles(
 		sandboxID,
 		defaults,

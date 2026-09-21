@@ -126,10 +126,6 @@ const (
 	SandboxEnvKey          = "RUNTIME_ENV_ID"
 	SandboxFunctionNameKey = "RUNTIME_FUNCTION_NAME"
 
-	// WritableHostsEnvKey opts a single sandbox into a writable, sandbox-local
-	// /etc/hosts on top of the static runtime.writable_hosts configuration.
-	WritableHostsEnvKey = "WRITABLE_HOSTS"
-
 	// Label key strings retain the legacy "io.sandbox.container.overlayfs.*" form
 	// for on-the-wire compatibility with existing OCI spec annotations.
 	SandboxOverlayfsLowerDirLabel  = "io.sandbox.container.overlayfs.lowerDir"

@@ -16,12 +16,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode"
 
 	runtime "github.com/inclusionAI/sandboxd/api/runtime/v1"
@@ -34,7 +36,22 @@ const (
 	sandboxHostnameLimit      = 64
 	imageProcessConfigVersion = 1
 	imageProcessConfigFile    = "image-process.json"
+
+	// writableHostsTmpfsSize bounds how much data a sandbox can write to its
+	// writable /etc/hosts. The generated initial contents are well under 200
+	// bytes; rk aliases appended by Terminal-Bench style setups stay in the
+	// low kilobytes.
+	writableHostsTmpfsSize = "64k"
 )
+
+// mountWritableHostsTmpfs is indirected so unit tests can exercise the
+// writable-hosts plumbing without the privileged tmpfs mount; production
+// always uses the real syscall.
+var mountWritableHostsTmpfs = func(target string) error {
+	return syscall.Mount("tmpfs", target, "tmpfs",
+		syscall.MS_NOSUID|syscall.MS_NODEV,
+		"size="+writableHostsTmpfsSize+",mode=0755")
+}
 
 var defaultSandboxFileDestinations = []string{
 	"/etc/hosts",
@@ -45,6 +62,11 @@ var defaultSandboxFileDestinations = []string{
 type preparedSandboxFiles struct {
 	root   string
 	mounts []*runtime.Mount
+
+	// writableHostsDir is the private tmpfs backing the writable hosts file
+	// when enabled. It bounds how much node storage a sandbox can consume
+	// through /etc/hosts and is unmounted on rollback.
+	writableHostsDir string
 }
 
 type imageProcessSpec struct {
@@ -101,6 +123,9 @@ func (p *preparedSandboxFiles) Mounts() []*runtime.Mount {
 func (p *preparedSandboxFiles) Rollback() {
 	if p == nil || p.root == "" {
 		return
+	}
+	if p.writableHostsDir != "" {
+		_ = syscall.Unmount(p.writableHostsDir, syscall.MNT_DETACH)
 	}
 	_ = os.RemoveAll(p.root)
 }
@@ -164,6 +189,21 @@ func (h *sandboxService) prepareSandboxFiles(
 			networkIP.String(), hostname,
 		)
 		source := filepath.Join(root, "hosts")
+		if writableHosts {
+			// Root-overlay storage quotas do not cover independently bind
+			// mounted host files, so the writable hosts file lives on a
+			// private size-bounded tmpfs: writes past the quota fail inside
+			// the sandbox instead of draining node storage.
+			hostsDir := filepath.Join(root, "hosts-rw")
+			if err := os.MkdirAll(hostsDir, 0755); err != nil {
+				return nil, fmt.Errorf("create writable hosts directory: %w", err)
+			}
+			if err := mountWritableHostsTmpfs(hostsDir); err != nil && !errors.Is(err, syscall.EBUSY) {
+				return nil, fmt.Errorf("mount writable hosts tmpfs: %w", err)
+			}
+			prepared.writableHostsDir = hostsDir
+			source = filepath.Join(hostsDir, "hosts")
+		}
 		if err := atomicWriteSandboxFile(source, []byte(content)); err != nil {
 			return nil, fmt.Errorf("write sandbox hosts: %w", err)
 		}

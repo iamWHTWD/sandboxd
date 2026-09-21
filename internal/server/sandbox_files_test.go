@@ -90,6 +90,16 @@ func TestBuildImageProcessSpecRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+// stubWritableHostsMount replaces the privileged tmpfs mount with a no-op so
+// unit tests exercise the writable-hosts plumbing without host mounts. Tests
+// that verify real capacity live in the privileged runtime E2E.
+func stubWritableHostsMount(t *testing.T) {
+	t.Helper()
+	previous := mountWritableHostsTmpfs
+	mountWritableHostsTmpfs = func(string) error { return nil }
+	t.Cleanup(func() { mountWritableHostsTmpfs = previous })
+}
+
 func TestPrepareSandboxFilesInjectsImageProcessConfig(t *testing.T) {
 	service := &sandboxService{config: config.Config{RootDir: t.TempDir()}}
 	target := "/run/yuanrong/image-process.json"
@@ -438,6 +448,7 @@ func TestPrepareSandboxFilesRejectsInvalidHostname(t *testing.T) {
 }
 
 func TestPrepareSandboxFilesWritableHosts(t *testing.T) {
+	stubWritableHostsMount(t)
 	resolver := filepath.Join(t.TempDir(), "resolv.conf")
 	if err := os.WriteFile(resolver, []byte("nameserver 1.1.1.1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -493,9 +504,24 @@ func TestPrepareSandboxFilesWritableHosts(t *testing.T) {
 		!strings.Contains(string(hostsContent), "10.88.0.2 "+svc.DefaultSandboxHostname) {
 		t.Fatalf("hosts initial content = %q", hostsContent)
 	}
+	// P1: the writable hosts file lives on the size-bounded private tmpfs
+	// directory so root-overlay quota bypass is not possible.
+	if prepared.writableHostsDir == "" {
+		t.Fatalf("writable hosts directory was not prepared")
+	}
+	if want := filepath.Join(prepared.root, "hosts-rw"); prepared.writableHostsDir != want {
+		t.Fatalf("writable hosts dir = %q, want %q", prepared.writableHostsDir, want)
+	}
+	if hosts.GetHostPath() != filepath.Join(prepared.writableHostsDir, "hosts") {
+		t.Fatalf("hosts source %q is not inside the bounded directory", hosts.GetHostPath())
+	}
+	if !strings.HasPrefix(hosts.GetHostPath(), prepared.writableHostsDir) {
+		t.Fatalf("hosts source escaped the bounded directory")
+	}
 }
 
 func TestPrepareSandboxFilesWritableHostsIsolatedPerSandbox(t *testing.T) {
+	stubWritableHostsMount(t)
 	service := &sandboxService{config: config.Config{RootDir: t.TempDir()}}
 	sources := make([]string, 0, 2)
 	for _, id := range []string{"sbox-a", "sbox-b"} {
@@ -530,6 +556,7 @@ func TestPrepareSandboxFilesWritableHostsIsolatedPerSandbox(t *testing.T) {
 }
 
 func TestPrepareSandboxFilesHonorsExplicitHostsMountOverWritablePolicy(t *testing.T) {
+	stubWritableHostsMount(t)
 	service := &sandboxService{config: config.Config{RootDir: t.TempDir()}}
 	explicit := &runtime.Mount{
 		Target:  "/etc/hosts",

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strings"
@@ -803,11 +804,26 @@ func (m *Manager) CollectResourceByID(id string) (OccupiedResource, error) {
 	return resource, nil
 }
 
+// writableHostsDirExists reports whether the writable-hosts tmpfs backing
+// directory is present for a sandbox root.
+func writableHostsDirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 func (m *Manager) CleanSandboxRoot(id string) {
 	sandboxRoot, err := util.JoinWithinRoot(m.root, id)
 	if err != nil {
 		logrus.Warnf("refuse to clean sandbox %q: %v", id, err)
 		return
+	}
+	// Detach any writable-hosts tmpfs below the sandbox root before the tree
+	// removal; mounts otherwise keep RemoveAll from reclaiming the directory.
+	sandboxFilesRoot := filepath.Join(sandboxRoot, "sandbox-files")
+	if hostsDir := filepath.Join(sandboxFilesRoot, "hosts-rw"); writableHostsDirExists(hostsDir) {
+		if err := unix.Unmount(hostsDir, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
+			logrus.Warnf("unmount writable hosts tmpfs for %q failed: %v", id, err)
+		}
 	}
 	if err := os.RemoveAll(sandboxRoot); err != nil {
 		// Try again

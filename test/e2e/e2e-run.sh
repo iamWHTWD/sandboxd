@@ -1758,23 +1758,46 @@ run_writable_hosts_checks() {
     assert_contains "${got}" "(127.0.0.1)" \
         "${label} alias resolution"
 
+    # issue #71 acceptance: a local HTTP service must be reachable through
+    # the appended alias, the Terminal-Bench 4.0 separate-verifier shape.
+    sbox_cmd exec "${writable_id}" /bin/sh -c \
+        'mkdir -p /var/www && echo tb4-verifier-served > /var/www/health.txt'
+    # busybox nc has no -z port-scan flag; probe with busybox wget instead.
+    sbox_cmd exec "${writable_id}" /bin/sh -c \
+        'httpd -f -p 0.0.0.0:9000 -h /var/www &
+         for i in $(seq 1 10); do
+             wget -q -O /dev/null http://127.0.0.1:9000/health.txt && exit 0
+             sleep 1
+         done
+         exit 1' ||
+        fail "${label} in-sandbox httpd did not start"
+    got="$(sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'printf "GET /health.txt HTTP/1.0\r\nHost: customer\r\n\r\n" | nc -w 2 tb4-local-service 9000 | tail -1')"
+    assert_eq "${got}" "tb4-verifier-served" \
+        "${label} HTTP access through appended alias"
+
     # P1: the writable hosts file lives on a size-bounded tmpfs (64k), so a
     # sandbox cannot drain node storage through /etc/hosts. Fill /etc/hosts
-    # itself past the quota: the over-budget write must fail with ENOSPC,
-    # the file must cap at the tmpfs size, and later appends must stay
-    # bounded too. Writing a neighboring file would exercise the root
-    # filesystem instead of the hosts quota, so only /etc/hosts counts.
+    # itself past the quota with a single sequential write (no seek: tmpfs
+    # bounds allocated data, not the logical file length a sparse write
+    # could extend without allocating). The over-budget write must fail
+    # with ENOSPC, the file must cap at the tmpfs size, and later appends
+    # must stay bounded too. Writing a neighboring file would exercise the
+    # root filesystem instead of the hosts quota, so only /etc/hosts
+    # counts.
     local quota_err
     quota_err="$(sbox_cmd exec "${writable_id}" /bin/sh \
-        -c 'dd if=/dev/zero of=/etc/hosts bs=1024 count=64 seek=64 conv=notrunc' 2>&1)" || true
+        -c 'dd if=/dev/zero of=/etc/hosts bs=1024 count=128 conv=notrunc' 2>&1)" || true
     if ! grep -qi "no space left" <<<"${quota_err}"; then
         fail "${label} writable hosts quota not enforced: ${quota_err}"
     fi
-    got="$(sbox_cmd exec "${writable_id}" /bin/sh -c 'wc -c /etc/hosts')"
-    case "${got}" in
-        65536*) ;;
-        *) fail "${label} hosts file not capped at the 64k budget: ${got}" ;;
-    esac
+    local hosts_size
+    hosts_size="$(sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'wc -c < /etc/hosts' | tr -d '[:space:]')"
+    if ! [[ "${hosts_size}" =~ ^[0-9]+$ ]] || \
+       [ "${hosts_size}" -gt 65536 ] || [ "${hosts_size}" -le 61440 ]; then
+        fail "${label} hosts size ${hosts_size} not capped at the 64k budget"
+    fi
     if sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'echo 127.0.0.1 over-budget-alias >> /etc/hosts' 2>/dev/null; then
         fail "${label} appends past the quota still succeed"

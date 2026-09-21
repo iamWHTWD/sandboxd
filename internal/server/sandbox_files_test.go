@@ -102,7 +102,7 @@ func TestPrepareSandboxFilesInjectsImageProcessConfig(t *testing.T) {
 	prepared, err := service.prepareSandboxFiles(
 		"sbox-test",
 		svc.SandboxDefaults{
-			Hostname: svc.DefaultSandboxHostname,
+			Hostname:          svc.DefaultSandboxHostname,
 			MountDestinations: defaultSandboxFileDestinations,
 		},
 		nil,
@@ -146,7 +146,7 @@ func TestPrepareSandboxFilesRejectsImageProcessMountConflict(t *testing.T) {
 			svc.SandboxDefaults{Hostname: svc.DefaultSandboxHostname},
 			nil,
 			false,
-		false,
+			false,
 			[]*runtime.Mount{{Target: target}},
 			&imageProcessSpec{Version: 1, Args: []string{}, Cwd: "/"},
 			configTarget,
@@ -381,7 +381,7 @@ func TestPrepareSandboxFilesWithoutNetworkACLOnACLNode(t *testing.T) {
 				svc.SandboxDefaults{Hostname: svc.DefaultSandboxHostname, MountDestinations: test.baseMounts},
 				net.ParseIP("10.88.0.2"),
 				false,
-		false,
+				false,
 				mounts,
 				nil,
 				"",
@@ -436,7 +436,6 @@ func TestPrepareSandboxFilesRejectsInvalidHostname(t *testing.T) {
 		t.Fatalf("invalid hostname error = %v", err)
 	}
 }
-
 
 func TestPrepareSandboxFilesWritableHosts(t *testing.T) {
 	resolver := filepath.Join(t.TempDir(), "resolv.conf")

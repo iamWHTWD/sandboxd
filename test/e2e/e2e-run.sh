@@ -650,6 +650,12 @@ http_get_without_proxy() {
         tail -1
 }
 
+assert_contains() {
+    local got="$1" want="$2" context="$3"
+    grep -qF -- "${want}" <<<"${got}" ||
+        fail "${context}: expected to contain '${want}', got '${got}'"
+}
+
 assert_eq() {
     local got="$1"
     local want="$2"
@@ -1712,9 +1718,12 @@ run_writable_hosts_checks() {
     got="$(sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'grep tb4-local-service /etc/hosts')"
     assert_eq "${got}" "127.0.0.1 tb4-local-service" "${label} hosts append"
-    got="$(sbox_cmd exec "${writable_id}" /bin/ping -c 1 -W 2 tb4-local-service 2>&1)"
-    grep -q "127.0.0.1" <<<"${got}" ||
-        fail "${label} appended alias does not resolve to 127.0.0.1: ${got}"
+    # busybox ping cannot send raw ICMP inside the sandbox, but its first
+    # line reports the getaddrinfo result, which is what resolves the alias.
+    got="$(sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'ping -c 1 -W 2 tb4-local-service 2>&1 | head -1' || true)"
+    assert_contains "${got}" "(127.0.0.1)" \
+        "${label} alias resolution"
 
     if sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'echo x >> /etc/resolv.conf' 2>/dev/null; then

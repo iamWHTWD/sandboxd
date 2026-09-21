@@ -1759,15 +1759,25 @@ run_writable_hosts_checks() {
         "${label} alias resolution"
 
     # P1: the writable hosts file lives on a size-bounded tmpfs (64k), so a
-    # sandbox cannot drain node storage through /etc/hosts. Fill past the
-    # quota: the write must fail and no oversized data may land beside it.
-    if sbox_cmd exec "${writable_id}" /bin/sh \
-        -c 'dd if=/dev/zero of=/etc/hosts.fill bs=1024 count=128 2>/dev/null'; then
-        fail "${label} writable hosts quota was not enforced"
+    # sandbox cannot drain node storage through /etc/hosts. Fill /etc/hosts
+    # itself past the quota: the over-budget write must fail with ENOSPC,
+    # the file must cap at the tmpfs size, and later appends must stay
+    # bounded too. Writing a neighboring file would exercise the root
+    # filesystem instead of the hosts quota, so only /etc/hosts counts.
+    local quota_err
+    quota_err="$(sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'dd if=/dev/zero of=/etc/hosts bs=1024 count=64 seek=64 conv=notrunc' 2>&1)" || true
+    if ! grep -qi "no space left" <<<"${quota_err}"; then
+        fail "${label} writable hosts quota not enforced: ${quota_err}"
     fi
+    got="$(sbox_cmd exec "${writable_id}" /bin/sh -c 'wc -c /etc/hosts')"
+    case "${got}" in
+        65536*) ;;
+        *) fail "${label} hosts file not capped at the 64k budget: ${got}" ;;
+    esac
     if sbox_cmd exec "${writable_id}" /bin/sh \
-        -c 'test -e /etc/hosts.fill'; then
-        fail "${label} quota bypass: oversized data landed on the hosts file"
+        -c 'echo 127.0.0.1 over-budget-alias >> /etc/hosts' 2>/dev/null; then
+        fail "${label} appends past the quota still succeed"
     fi
 
     if sbox_cmd exec "${writable_id}" /bin/sh \

@@ -1114,9 +1114,8 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 	if startReq.Runtime == "" {
 		startReq.Runtime = config.RuntimeNameRunsc
 	}
-	writableHosts := h.config.PluginConfig.RuntimeConfig.WritableHosts ||
-		startReq.WritableHosts
-	if writableHosts && startReq.Runtime == config.RuntimeNameFirecracker {
+	if (h.config.PluginConfig.RuntimeConfig.WritableHosts || startReq.WritableHosts) &&
+		startReq.Runtime == config.RuntimeNameFirecracker {
 		err := fmt.Errorf(
 			"writable /etc/hosts is not supported by runtime %s",
 			config.RuntimeNameFirecracker,
@@ -1244,6 +1243,8 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		return &runtime.StartResponse{Code: -1, Message: err.Error()},
 			errord.ToGRPC(fmt.Errorf("%v: %w", err, errord.ErrFailedPrecondition))
 	}
+	writableHosts := h.config.PluginConfig.RuntimeConfig.WritableHosts ||
+		startReq.WritableHosts
 	if len(startReq.XpuAllocations) > 0 && startReq.Runtime != config.RuntimeNameRunsc {
 		err := fmt.Errorf("XPU allocations require runtime %q", config.RuntimeNameRunsc)
 		return &runtime.StartResponse{Code: -1, Message: err.Error()},

@@ -1072,6 +1072,13 @@ type ExtraConfig struct {
 	// EnableKVM exposes the configured character device as /dev/kvm. It is
 	// intentionally opt-in and valid only for the host-kernel runc runtime.
 	EnableKVM bool `json:"enableKVM,omitempty"`
+
+	// WritableHosts is the extra_config transport for the typed
+	// StartRequest.writable_hosts policy (AKernel issue #71): the SDK and
+	// frontend forward sandbox options through extra_config, and this field
+	// is resolved back into the typed request field, which stays the single
+	// source of truth for the writable-hosts capability gate.
+	WritableHosts bool `json:"writableHosts,omitempty"`
 }
 
 type fsPrepareResult struct {
@@ -1222,6 +1229,20 @@ func (h *sandboxService) Start(ctx context.Context, request *runtime.StartReques
 		err := fmt.Errorf("enableKVM is supported only by runtime %q", config.RuntimeNameRunc)
 		return &runtime.StartResponse{Code: -1, Message: err.Error()},
 			errord.ToGRPC(errord.ErrInvalidArgument)
+	}
+	if extraConfig.WritableHosts {
+		// Resolve the extra_config transport into the typed field so the
+		// gate below and prepareSandboxFiles see one source of truth.
+		startReq.WritableHosts = true
+	}
+	if (h.config.PluginConfig.RuntimeConfig.WritableHosts || startReq.WritableHosts) &&
+		startReq.Runtime == config.RuntimeNameFirecracker {
+		err := fmt.Errorf(
+			"writable /etc/hosts is not supported by runtime %s",
+			config.RuntimeNameFirecracker,
+		)
+		return &runtime.StartResponse{Code: -1, Message: err.Error()},
+			errord.ToGRPC(fmt.Errorf("%v: %w", err, errord.ErrFailedPrecondition))
 	}
 	if len(startReq.XpuAllocations) > 0 && startReq.Runtime != config.RuntimeNameRunsc {
 		err := fmt.Errorf("XPU allocations require runtime %q", config.RuntimeNameRunsc)

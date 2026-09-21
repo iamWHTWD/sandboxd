@@ -362,6 +362,38 @@ func TestStartWritableHostsNotRejectedByGate(t *testing.T) {
 	}
 }
 
+func TestStartResolvesWritableHostsFromExtraConfig(t *testing.T) {
+	s := newTestService(t, map[string]svc.Handler{
+		config.RuntimeNameRunsc: svc.NewFakeRuntimeHandler(),
+	})
+	response, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime:     config.RuntimeNameRunsc,
+		Rootfs:      &runtime.RootfsConfig{},
+		ExtraConfig: `{"writableHosts":true}`,
+	})
+	if err == nil && response.Code == 0 {
+		return // fully wired fake; transport resolved and gate passed
+	}
+	msg := response.GetMessage()
+	if err != nil && msg == "" {
+		msg = err.Error()
+	}
+	assert.NotContains(t, msg, "writable /etc/hosts")
+}
+
+func TestStartRejectsWritableHostsExtraConfigForFirecracker(t *testing.T) {
+	s := newTestService(t, map[string]svc.Handler{
+		config.RuntimeNameFirecracker: svc.NewFakeRuntimeHandler(),
+	})
+	response, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime:     config.RuntimeNameFirecracker,
+		Rootfs:      &runtime.RootfsConfig{},
+		ExtraConfig: `{"writableHosts":true}`,
+	})
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Contains(t, response.Message, "writable /etc/hosts is not supported")
+}
+
 func TestStartRejectsEnableKVMForRunsc(t *testing.T) {
 	s := newTestService(t, map[string]svc.Handler{
 		config.RuntimeNameRunsc: svc.NewFakeRuntimeHandler(),

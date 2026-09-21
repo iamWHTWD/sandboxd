@@ -340,11 +340,14 @@ func (m *Manager) housekeeping() {
 		}
 	}
 
-	// 3. Clean recycled paths
+	// 3. Clean recycled paths. Orphan directories can still carry the
+	// writable-hosts tmpfs when sandboxd crashed before metadata was
+	// stored, so recycle them through the same detach-then-remove path as
+	// normal sandbox cleanup.
 	dir, err := os.ReadDir(m.recyclePath)
 	if err == nil {
 		for _, d := range dir {
-			os.RemoveAll(filepath.Join(m.recyclePath, d.Name()))
+			detachManagedMountsAndRemove("recycled "+d.Name(), filepath.Join(m.recyclePath, d.Name()))
 		}
 	}
 
@@ -817,20 +820,28 @@ func (m *Manager) CleanSandboxRoot(id string) {
 		logrus.Warnf("refuse to clean sandbox %q: %v", id, err)
 		return
 	}
-	// Detach any writable-hosts tmpfs below the sandbox root before the tree
-	// removal; mounts otherwise keep RemoveAll from reclaiming the directory.
-	sandboxFilesRoot := filepath.Join(sandboxRoot, "sandbox-files")
+	detachManagedMountsAndRemove("sandbox "+id, sandboxRoot)
+}
+
+// detachManagedMountsAndRemove detaches sandbox-managed mounts (the
+// writable-hosts tmpfs) rooted below dir and then removes the tree. It backs
+// both normal sandbox cleanup and orphan-directory recycling: a sandboxd
+// crash between mounting the writable-hosts tmpfs and storing metadata
+// leaves a mounted directory without rollback coverage, and mounts keep
+// RemoveAll from reclaiming the directory tree.
+func detachManagedMountsAndRemove(what, dir string) {
+	sandboxFilesRoot := filepath.Join(dir, "sandbox-files")
 	if hostsDir := filepath.Join(sandboxFilesRoot, "hosts-rw"); writableHostsDirExists(hostsDir) {
 		if err := unix.Unmount(hostsDir, unix.MNT_DETACH); err != nil && !errors.Is(err, unix.EINVAL) {
-			logrus.Warnf("unmount writable hosts tmpfs for %q failed: %v", id, err)
+			logrus.Warnf("unmount writable hosts tmpfs for %s failed: %v", what, err)
 		}
 	}
-	if err := os.RemoveAll(sandboxRoot); err != nil {
+	if err := os.RemoveAll(dir); err != nil {
 		// Try again
 		if strings.Contains(err.Error(), "directory not empty") {
-			err = os.RemoveAll(sandboxRoot)
+			err = os.RemoveAll(dir)
 			if err != nil {
-				logrus.Warnf("remove sandbox %s root failed: %v", sandboxRoot, err)
+				logrus.Warnf("remove %s at %s failed: %v", what, dir, err)
 			}
 		}
 	}

@@ -67,6 +67,10 @@ SANDBOXD_PID=""
 HTTPD_PID=""
 SANDBOX_ID=""
 WRITABLE_HOSTS_IDS=()
+# WRITABLE_HOSTS_SUFFIX disambiguates sandbox ids between the primary and the
+# cgroup-disabled e2e containers, which both run the runsc case with the same
+# function; fixed ids otherwise collide with the sibling container run.
+WRITABLE_HOSTS_SUFFIX="${E2E_DISABLE_CGROUP:-0}"
 STRESS_IDS=()
 CGROUP_MODE=""
 CGROUP_DIR=""
@@ -1704,7 +1708,7 @@ run_writable_hosts_checks() {
     node_hosts_before="$(md5sum /etc/hosts)"
 
     local writable_id
-    writable_id="sbox-e2e-${label}-hosts"
+    writable_id="sbox-e2e-${label}-hosts-n${WRITABLE_HOSTS_SUFFIX}"
     WRITABLE_HOSTS_IDS+=("${writable_id}")
     sbox_cmd start \
         --quiet \
@@ -1716,11 +1720,11 @@ run_writable_hosts_checks() {
         --cpu-millicores 100 \
         --memory-mb 128 \
         /bin/sleep 300
-    wait_for_state "${writable_id}" "SANDBOX_STATE_RUNNING"
+    wait_for_state "${writable_id}" "SANDBOX_STATE_RUNNING" 300
 
     # extra_config is the transport the SDK and frontend use; exercise it in
     # addition to the typed --writable-hosts flag above.
-    local transport_id="sbox-e2e-${label}-hosts-transport"
+    local transport_id="sbox-e2e-${label}-hosts-transport-n${WRITABLE_HOSTS_SUFFIX}"
     WRITABLE_HOSTS_IDS+=("${transport_id}")
     sbox_cmd start \
         --quiet \
@@ -1732,7 +1736,7 @@ run_writable_hosts_checks() {
         --cpu-millicores 100 \
         --memory-mb 128 \
         /bin/sleep 300
-    wait_for_state "${transport_id}" "SANDBOX_STATE_RUNNING"
+    wait_for_state "${transport_id}" "SANDBOX_STATE_RUNNING" 300
     sbox_cmd exec "${transport_id}" /bin/sh \
         -c 'echo "127.0.0.1 transport-alias" >> /etc/hosts'
     sbox_cmd exec "${transport_id}" /bin/sh \
@@ -1754,6 +1758,18 @@ run_writable_hosts_checks() {
     assert_contains "${got}" "(127.0.0.1)" \
         "${label} alias resolution"
 
+    # P1: the writable hosts file lives on a size-bounded tmpfs (64k), so a
+    # sandbox cannot drain node storage through /etc/hosts. Fill past the
+    # quota: the write must fail and no oversized data may land beside it.
+    if sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'dd if=/dev/zero of=/etc/hosts.fill bs=1024 count=128 2>/dev/null'; then
+        fail "${label} writable hosts quota was not enforced"
+    fi
+    if sbox_cmd exec "${writable_id}" /bin/sh \
+        -c 'test -e /etc/hosts.fill'; then
+        fail "${label} quota bypass: oversized data landed on the hosts file"
+    fi
+
     if sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'echo x >> /etc/resolv.conf' 2>/dev/null; then
         fail "${label} resolver became writable"
@@ -1764,7 +1780,7 @@ run_writable_hosts_checks() {
     fi
 
     local other_id
-    other_id="sbox-e2e-${label}-hosts-ro"
+    other_id="sbox-e2e-${label}-hosts-ro-n${WRITABLE_HOSTS_SUFFIX}"
     WRITABLE_HOSTS_IDS+=("${other_id}")
     sbox_cmd start \
         --quiet \
@@ -1775,7 +1791,7 @@ run_writable_hosts_checks() {
         --cpu-millicores 100 \
         --memory-mb 128 \
         /bin/sleep 300
-    wait_for_state "${other_id}" "SANDBOX_STATE_RUNNING"
+    wait_for_state "${other_id}" "SANDBOX_STATE_RUNNING" 300
     if sbox_cmd exec "${other_id}" /bin/sh \
         -c 'echo y >> /etc/hosts' 2>/dev/null; then
         fail "${label} default hosts mount is writable"

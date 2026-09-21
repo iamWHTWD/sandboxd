@@ -363,20 +363,50 @@ func TestStartWritableHostsNotRejectedByGate(t *testing.T) {
 	}
 }
 
+// fakeInterfaceAllocator hands out in-memory network resources so unit
+// tests exercise Start without creating host network devices or requiring
+// privileged network setup.
+type fakeInterfaceAllocator struct {
+	next int
+}
+
+func (f *fakeInterfaceAllocator) Allocate() (string, error) {
+	return f.allocateEphemeral("")
+}
+
+func (f *fakeInterfaceAllocator) AllocateEphemeral(string) (string, error) {
+	return f.allocateEphemeral("")
+}
+
+func (f *fakeInterfaceAllocator) allocateEphemeral(string) (string, error) {
+	resource := &networkmanager.NetResource{
+		Ip: net.ParseIP(fmt.Sprintf("10.231.0.%d", 2+f.next%250)),
+	}
+	resource.Interface = &net.Interface{
+		Name:  fmt.Sprintf("tap-fake%d", f.next),
+		Index: 100 + f.next,
+	}
+	f.next++
+	return resource.ToString(), nil
+}
+
+func (f *fakeInterfaceAllocator) Recycle(string) error    { return nil }
+func (f *fakeInterfaceAllocator) Deactivate(string) error { return nil }
+func (f *fakeInterfaceAllocator) Release(string) error    { return nil }
+func (f *fakeInterfaceAllocator) Discard(string) error    { return nil }
+
 // newCaptureTestService builds a service whose Start can run past resource
-// preparation, backed by a real InterfaceManager with a private IP range.
+// preparation, backed by a fake interface allocator and a stubbed writable
+// hosts tmpfs mount, so unprivileged unit tests reach the hosts assertions
+// without host network or mount privileges.
 func newCaptureTestService(t *testing.T, capture svc.Handler) *sandboxService {
 	t.Helper()
+	stubWritableHostsMount(t)
 	s := newTestService(t, map[string]svc.Handler{"runsc": capture})
 	s.config.DisableCgroup = true
 	s.config.NatBackend = config.NatBackendIptables
-	iface, err := networkmanager.NewInterfaceManager(
-		s.store, defaultTestIPRange, 16, 32, config.NatBackendIptables,
-	)
-	if err != nil {
-		t.Fatalf("initialize interface manager: %v", err)
-	}
-	s.networkMgr = newNetworkManager(iface, config.NatBackendIptables, false)
+	s.networkMgr = newNetworkManagerForTests(
+		&fakeInterfaceAllocator{}, config.NatBackendIptables, false)
 	return s
 }
 
@@ -930,7 +960,6 @@ func (f *fakeNetworkManager) CleanupLocalDNATRule(
 }
 
 const testNetworkType = "fake-test-net"
-const defaultTestIPRange = "10.231.0.1/16"
 
 func TestResolveNATBackend(t *testing.T) {
 	tests := []struct {

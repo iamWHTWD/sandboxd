@@ -66,6 +66,7 @@ export RUNSC_IGNORE_CGROUPS="${DISABLE_CGROUP}"
 SANDBOXD_PID=""
 HTTPD_PID=""
 SANDBOX_ID=""
+WRITABLE_HOSTS_IDS=()
 STRESS_IDS=()
 CGROUP_MODE=""
 CGROUP_DIR=""
@@ -146,6 +147,11 @@ cleanup() {
     local stress_id
     for stress_id in "${STRESS_IDS[@]}"; do
         /usr/local/bin/sbox --address "${SOCKET}" --timeout 20s delete "${stress_id}" >/dev/null 2>&1
+    done
+    local hosts_id
+    for hosts_id in "${WRITABLE_HOSTS_IDS[@]:-}"; do
+        [ -n "${hosts_id}" ] || continue
+        /usr/local/bin/sbox --address "${SOCKET}" --timeout 20s delete "${hosts_id}" >/dev/null 2>&1
     done
     if [ -n "${HTTPD_PID}" ]; then
         kill "${HTTPD_PID}" >/dev/null 2>&1
@@ -1698,17 +1704,40 @@ run_writable_hosts_checks() {
     node_hosts_before="$(md5sum /etc/hosts)"
 
     local writable_id
-    writable_id="$(sbox_cmd start \
+    writable_id="sbox-e2e-${label}-hosts"
+    WRITABLE_HOSTS_IDS+=("${writable_id}")
+    sbox_cmd start \
         --quiet \
         --runtime "${runtime}" \
-        --sandbox-id "sbox-e2e-${label}-hosts" \
+        --sandbox-id "${writable_id}" \
         --rootfs "${rootfs}" \
         --cwd / \
         --writable-hosts \
         --cpu-millicores 100 \
         --memory-mb 128 \
-        /bin/sleep 300)"
+        /bin/sleep 300
     wait_for_state "${writable_id}" "SANDBOX_STATE_RUNNING"
+
+    # extra_config is the transport the SDK and frontend use; exercise it in
+    # addition to the typed --writable-hosts flag above.
+    local transport_id="sbox-e2e-${label}-hosts-transport"
+    WRITABLE_HOSTS_IDS+=("${transport_id}")
+    sbox_cmd start \
+        --quiet \
+        --runtime "${runtime}" \
+        --sandbox-id "${transport_id}" \
+        --rootfs "${rootfs}" \
+        --cwd / \
+        --extra-config '{"writableHosts":true}' \
+        --cpu-millicores 100 \
+        --memory-mb 128 \
+        /bin/sleep 300
+    wait_for_state "${transport_id}" "SANDBOX_STATE_RUNNING"
+    sbox_cmd exec "${transport_id}" /bin/sh \
+        -c 'echo "127.0.0.1 transport-alias" >> /etc/hosts'
+    sbox_cmd exec "${transport_id}" /bin/sh \
+        -c 'grep -q transport-alias /etc/hosts' ||
+        fail "${label} extra_config writableHosts transport did not apply"
 
     # Default stays read-only: the managed files reject writes, and a second
     # sandbox without the opt-in cannot write its hosts either.
@@ -1735,15 +1764,17 @@ run_writable_hosts_checks() {
     fi
 
     local other_id
-    other_id="$(sbox_cmd start \
+    other_id="sbox-e2e-${label}-hosts-ro"
+    WRITABLE_HOSTS_IDS+=("${other_id}")
+    sbox_cmd start \
         --quiet \
         --runtime "${runtime}" \
-        --sandbox-id "sbox-e2e-${label}-hosts-ro" \
+        --sandbox-id "${other_id}" \
         --rootfs "${rootfs}" \
         --cwd / \
         --cpu-millicores 100 \
         --memory-mb 128 \
-        /bin/sleep 300)"
+        /bin/sleep 300
     wait_for_state "${other_id}" "SANDBOX_STATE_RUNNING"
     if sbox_cmd exec "${other_id}" /bin/sh \
         -c 'echo y >> /etc/hosts' 2>/dev/null; then
@@ -1756,6 +1787,7 @@ run_writable_hosts_checks() {
 
     sbox_cmd delete "${writable_id}"
     sbox_cmd delete "${other_id}"
+    sbox_cmd delete "${transport_id}"
 
     assert_eq "${node_hosts_before}" "$(md5sum /etc/hosts)" \
         "${label} node hosts file changed"

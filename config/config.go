@@ -88,8 +88,18 @@ type RuntimeConfig struct {
 	// WritableHosts mounts the sandbox-generated /etc/hosts read-write so root
 	// inside the sandbox can append local service aliases at runtime (AKernel
 	// issue #71). OR-combined with the typed StartRequest.writable_hosts
-	// field. /etc/hostname and /etc/resolv.conf stay read-only regardless,
-	// and the firecracker runtime rejects writable-hosts starts.
+	// field and the extra_config.writableHosts transport used by the SDK and
+	// frontend. /etc/hostname and /etc/resolv.conf stay read-only regardless.
+	//
+	// Supported runtimes: runsc, runc, and kata. The firecracker runtime
+	// cannot materialize writable managed files, so enabling this setting
+	// node-wide fails service startup when the firecracker runtime class is
+	// configured, and per-request opt-ins are rejected with
+	// FailedPrecondition. Hosts content lives in the sandbox-private
+	// sandbox-files directory: it persists across sandboxd restarts as part of
+	// normal sandbox state, but a checkpoint/restore creates a fresh hosts
+	// file from the generated initial contents and does not carry appended
+	// aliases across the checkpoint boundary.
 	WritableHosts bool `toml:"writable_hosts" json:"writableHosts"`
 
 	// Runsc configures the gVisor runtime adapter.

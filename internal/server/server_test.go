@@ -36,6 +36,7 @@ import (
 	"github.com/inclusionAI/sandboxd/pkg/volumemanager"
 	cmap "github.com/orcaman/concurrent-map/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -362,23 +363,121 @@ func TestStartWritableHostsNotRejectedByGate(t *testing.T) {
 	}
 }
 
+// newCaptureTestService builds a service whose Start can run past resource
+// preparation, backed by a real InterfaceManager with a private IP range.
+func newCaptureTestService(t *testing.T, capture svc.Handler) *sandboxService {
+	t.Helper()
+	s := newTestService(t, map[string]svc.Handler{"runsc": capture})
+	s.config.DisableCgroup = true
+	s.config.NatBackend = config.NatBackendIptables
+	iface, err := networkmanager.NewInterfaceManager(
+		s.store, defaultTestIPRange, 16, 32, config.NatBackendIptables,
+	)
+	if err != nil {
+		t.Fatalf("initialize interface manager: %v", err)
+	}
+	s.networkMgr = newNetworkManager(iface, config.NatBackendIptables, false)
+	return s
+}
+
+// capturingHandler records the StartConfig the server prepared so tests can
+// assert on the mounts that actually reach a runtime handler.
+type capturingHandler struct {
+	svc.Handler
+	captured atomic.Pointer[svc.StartConfig]
+}
+
+func (c *capturingHandler) Start(ctx context.Context, cfg svc.StartConfig) error {
+	c.captured.Store(&cfg)
+	return nil
+}
+
+// hostsMountOptions locates the generated /etc/hosts mount in a StartConfig.
+func hostsMountOptions(cfg *svc.StartConfig) ([]string, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	for _, mount := range cfg.Mounts {
+		if mount.GetTarget() == "/etc/hosts" {
+			return mount.GetOptions(), true
+		}
+	}
+	return nil, false
+}
+
+func hasOption(options []string, want string) bool {
+	for _, option := range options {
+		if option == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStartResolvesWritableHostsFromExtraConfig proves the full resolution
+// chain: extra_config.writableHosts must produce a runtime-facing hosts
+// mount without "ro".
 func TestStartResolvesWritableHostsFromExtraConfig(t *testing.T) {
-	s := newTestService(t, map[string]svc.Handler{
-		config.RuntimeNameRunsc: svc.NewFakeRuntimeHandler(),
-	})
-	response, err := s.Start(context.Background(), &runtime.StartRequest{
-		Runtime:     config.RuntimeNameRunsc,
-		Rootfs:      &runtime.RootfsConfig{},
+	capture := &capturingHandler{Handler: svc.NewFakeRuntimeHandler()}
+	s := newCaptureTestService(t, capture)
+	rootfsDir := t.TempDir()
+	_, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime: config.RuntimeNameRunsc,
+		Rootfs: &runtime.RootfsConfig{
+			Type:   runtime.RootfsSrcType_LOCAL,
+			Source: &runtime.RootfsConfig_Path{Path: rootfsDir},
+		},
 		ExtraConfig: `{"writableHosts":true}`,
+		Stdout:      "/dev/null",
+		Stderr:      "/dev/null",
 	})
-	if err == nil && response.Code == 0 {
-		return // fully wired fake; transport resolved and gate passed
+	require.NoError(t, err)
+	options, ok := hostsMountOptions(capture.captured.Load())
+	require.True(t, ok, "no /etc/hosts mount reached the runtime handler")
+	assert.False(t, hasOption(options, "ro"),
+		"hosts mount still read-only: %v", options)
+}
+
+// TestStartDefaultHostsStaysReadOnly pins the default: without any writable
+// opt-in the generated hosts mount keeps "ro".
+func TestStartDefaultHostsStaysReadOnly(t *testing.T) {
+	capture := &capturingHandler{Handler: svc.NewFakeRuntimeHandler()}
+	s := newCaptureTestService(t, capture)
+	rootfsDir := t.TempDir()
+	_, err := s.Start(context.Background(), &runtime.StartRequest{
+		Runtime: config.RuntimeNameRunsc,
+		Rootfs: &runtime.RootfsConfig{
+			Type:   runtime.RootfsSrcType_LOCAL,
+			Source: &runtime.RootfsConfig_Path{Path: rootfsDir},
+		},
+		Stdout: "/dev/null",
+		Stderr: "/dev/null",
+	})
+	require.NoError(t, err)
+	options, ok := hostsMountOptions(capture.captured.Load())
+	require.True(t, ok, "no /etc/hosts mount reached the runtime handler")
+	assert.True(t, hasOption(options, "ro"),
+		"default hosts mount is writable: %v", options)
+}
+
+// TestNewSandboxServiceRejectsGlobalWritableHostsWithFirecracker verifies
+// the startup validation: a node-wide writable_hosts default combined with
+// the firecracker runtime class must fail service construction.
+func TestNewSandboxServiceRejectsGlobalWritableHostsWithFirecracker(t *testing.T) {
+	rc := config.RuntimeConfig{
+		WritableHosts: true,
+		RuntimeBinary: map[string]string{
+			config.RuntimeNameFirecracker: "/bin/true",
+		},
 	}
-	msg := response.GetMessage()
-	if err != nil && msg == "" {
-		msg = err.Error()
+	err := validateWritableHostsConfig(rc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writable_hosts cannot be enabled node-wide")
+
+	rc.RuntimeBinary = map[string]string{
+		config.RuntimeNameRunsc: "/usr/local/bin/runsc",
 	}
-	assert.NotContains(t, msg, "writable /etc/hosts")
+	assert.NoError(t, validateWritableHostsConfig(rc))
 }
 
 func TestStartRejectsWritableHostsExtraConfigForFirecracker(t *testing.T) {
@@ -831,6 +930,7 @@ func (f *fakeNetworkManager) CleanupLocalDNATRule(
 }
 
 const testNetworkType = "fake-test-net"
+const defaultTestIPRange = "10.231.0.1/16"
 
 func TestResolveNATBackend(t *testing.T) {
 	tests := []struct {

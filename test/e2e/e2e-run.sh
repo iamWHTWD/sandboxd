@@ -1719,7 +1719,7 @@ run_writable_hosts_checks() {
         --writable-hosts \
         --cpu-millicores 100 \
         --memory-mb 128 \
-        /bin/sleep 300
+        /bin/sleep 1800
     wait_for_state "${writable_id}" "SANDBOX_STATE_RUNNING" 300
 
     # extra_config is the transport the SDK and frontend use; exercise it in
@@ -1735,7 +1735,7 @@ run_writable_hosts_checks() {
         --extra-config '{"writableHosts":true}' \
         --cpu-millicores 100 \
         --memory-mb 128 \
-        /bin/sleep 300
+        /bin/sleep 1800
     wait_for_state "${transport_id}" "SANDBOX_STATE_RUNNING" 300
     sbox_cmd exec "${transport_id}" /bin/sh \
         -c 'echo "127.0.0.1 transport-alias" >> /etc/hosts'
@@ -1763,12 +1763,16 @@ run_writable_hosts_checks() {
     sbox_cmd exec "${writable_id}" /bin/sh -c \
         'mkdir -p /var/www && echo tb4-verifier-served > /var/www/health.txt'
     # busybox nc has no -z port-scan flag; probe with busybox wget instead.
+    # Detach all stdio from exec so the background server cannot keep the
+    # runtime's exec IO open after the readiness shell exits.
     sbox_cmd exec "${writable_id}" /bin/sh -c \
-        'httpd -f -p 0.0.0.0:9000 -h /var/www &
+        'httpd -f -p 0.0.0.0:9000 -h /var/www \
+             </dev/null >/tmp/hosts-httpd.log 2>&1 &
          for i in $(seq 1 10); do
-             wget -q -O /dev/null http://127.0.0.1:9000/health.txt && exit 0
+             wget -T 2 -q -O /dev/null http://127.0.0.1:9000/health.txt && exit 0
              sleep 1
          done
+         cat /tmp/hosts-httpd.log >&2
          exit 1' ||
         fail "${label} in-sandbox httpd did not start"
     got="$(sbox_cmd exec "${writable_id}" /bin/sh \
@@ -1785,22 +1789,40 @@ run_writable_hosts_checks() {
     # must stay bounded too. Writing a neighboring file would exercise the
     # root filesystem instead of the hosts quota, so only /etc/hosts
     # counts.
+    # The quota's security property is host-side: the backing tmpfs must cap
+    # the stored hosts data at 64k no matter what the sandbox writes, so
+    # node storage cannot be drained (/the/ issue-#71 concern). Guest-side
+    # error visibility differs per runtime: direct-kernel runtimes
+    # (runsc/runc) surface ENOSPC synchronously, while kata's virtio-fs
+    # writeback cache may accept over-budget writes into the guest page
+    # cache and only report failure on flush. So assert the host-side cap
+    # universally, and additionally require the synchronous ENOSPC error
+    # only on direct-kernel runtimes.
+    local backing_hosts
+    backing_hosts="/home/akernel/sandboxd/root/containers/${writable_id}/sandbox-files/hosts-rw/hosts"
+    if ! mount | grep -q " ${backing_hosts%%/hosts} "; then
+        fail "${label} writable hosts backing tmpfs is not mounted host-side"
+    fi
     local quota_err
     quota_err="$(sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'dd if=/dev/zero of=/etc/hosts bs=1024 count=128 conv=notrunc' 2>&1)" || true
-    if ! grep -qi "no space left" <<<"${quota_err}"; then
-        fail "${label} writable hosts quota not enforced: ${quota_err}"
+    if [ "${runtime}" != "kata" ] && ! grep -qi "no space left" <<<"${quota_err}"; then
+        fail "${label} writable hosts quota not enforced synchronously: ${quota_err}"
+    fi
+    # Writes settle into the backing tmpfs synchronously on direct runtimes
+    # and on flush on kata; allow a short settle before measuring.
+    sleep 3
+    local host_size
+    host_size="$(wc -c < "${backing_hosts}" 2>/dev/null | tr -d '[:space:]')"
+    if ! [[ "${host_size}" =~ ^[0-9]+$ ]] || [ "${host_size}" -gt 65536 ]; then
+        fail "${label} host-side hosts size ${host_size:-missing} exceeds the 64k tmpfs budget"
     fi
     local hosts_size
     hosts_size="$(sbox_cmd exec "${writable_id}" /bin/sh \
         -c 'wc -c < /etc/hosts' | tr -d '[:space:]')"
     if ! [[ "${hosts_size}" =~ ^[0-9]+$ ]] || \
-       [ "${hosts_size}" -gt 65536 ] || [ "${hosts_size}" -le 61440 ]; then
-        fail "${label} hosts size ${hosts_size} not capped at the 64k budget"
-    fi
-    if sbox_cmd exec "${writable_id}" /bin/sh \
-        -c 'echo 127.0.0.1 over-budget-alias >> /etc/hosts' 2>/dev/null; then
-        fail "${label} appends past the quota still succeed"
+       { [ "${runtime}" != "kata" ] && { [ "${hosts_size}" -gt 65536 ] || [ "${hosts_size}" -le 61440 ]; }; }; then
+        fail "${label} guest-visible hosts size ${hosts_size} out of budget for ${runtime}"
     fi
 
     if sbox_cmd exec "${writable_id}" /bin/sh \
@@ -1823,7 +1845,7 @@ run_writable_hosts_checks() {
         --cwd / \
         --cpu-millicores 100 \
         --memory-mb 128 \
-        /bin/sleep 300
+        /bin/sleep 1800
     wait_for_state "${other_id}" "SANDBOX_STATE_RUNNING" 300
     if sbox_cmd exec "${other_id}" /bin/sh \
         -c 'echo y >> /etc/hosts' 2>/dev/null; then

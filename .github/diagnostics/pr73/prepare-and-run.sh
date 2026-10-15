@@ -46,24 +46,26 @@ for variant in base pr; do
   sha="${!variant}"
   destination="${task_root}/source/${variant}"
   mkdir -p "${destination}"
-  curl --fail --location --retry 5 --connect-timeout 15 --max-time 180 \
-    "https://api.github.com/repos/inclusionAI/sandboxd/git/commits/${sha}" \
-    -o "${evidence}/commit-${variant}.json"
-  python3 - "${evidence}/commit-${variant}.json" "${sha}" "${variant}" <<'PY'
-import json, sys
-commit = json.load(open(sys.argv[1]))
-assert commit['sha'] == sys.argv[2]
-if sys.argv[3] == 'pr':
-    assert {p['sha'] for p in commit['parents']} == {
-        '7f16edd2254c94d968bce3fcdea8a6df4e40116e',
-        '8d52e1dd9fa02ab2ffba848e63374b7e999ad42f',
-    }
-PY
   archive="${task_root}/${variant}.tar.gz"
   timeout --signal=TERM --kill-after=5s 180s git -C "${task_root}/verified-git" \
     fetch --no-tags --depth=1 https://github.com/inclusionAI/sandboxd.git "${sha}"
   [[ "$(git -C "${task_root}/verified-git" rev-parse FETCH_HEAD)" == "${sha}" ]]
   [[ "$(git -C "${task_root}/verified-git" cat-file -t "${sha}")" == commit ]]
+  python3 - "${task_root}/verified-git" "${sha}" "${variant}" \
+    "${evidence}/commit-${variant}.json" <<'PY'
+import json, subprocess, sys
+raw = subprocess.check_output(['git', '-C', sys.argv[1], 'cat-file', '-p', sys.argv[2]], text=True)
+headers = raw.split('\n\n', 1)[0].splitlines()
+parents = [line.split(' ', 1)[1] for line in headers if line.startswith('parent ')]
+tree = next(line.split(' ', 1)[1] for line in headers if line.startswith('tree '))
+if sys.argv[3] == 'pr':
+    assert set(parents) == {
+        '7f16edd2254c94d968bce3fcdea8a6df4e40116e',
+        '8d52e1dd9fa02ab2ffba848e63374b7e999ad42f',
+    }, parents
+with open(sys.argv[4], 'w') as output:
+    json.dump({'sha': sys.argv[2], 'tree': tree, 'parents': parents}, output, indent=2)
+PY
   git -C "${task_root}/verified-git" archive --format=tar.gz "${sha}" >"${archive}"
   sha256sum "${archive}" >>"${evidence}/source-archives.sha256"
   tar -xzf "${archive}" -C "${destination}"

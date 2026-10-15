@@ -1,0 +1,58 @@
+name: PR73 Firecracker same-runner diagnostic
+
+on:
+  push:
+    branches: [fc-pr73-diagnostics]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr73-firecracker-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  interleaved:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      FC_DIAG_ROOT: ${{ runner.temp }}/pr73-firecracker-diagnostic
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.25.5'
+          cache: false
+      - name: Prepare dedicated hosted runner
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          echo "FC_DIAG_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev cpu-checker "linux-modules-extra-$(uname -r)"
+          sudo modprobe erofs
+          sudo modprobe br_netfilter
+          sudo modprobe ip6_tables
+          sudo modprobe ip6table_filter
+          sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+          sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+          test -c /dev/net/tun
+          sudo modprobe kvm
+          sudo chmod 0666 /dev/kvm
+          sudo kvm-ok
+      - name: Build fixed revisions and run A B B A on this runner
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh
+      - name: Collect dedicated-runner kernel messages
+        if: always()
+        run: |
+          mkdir -p "$FC_DIAG_ROOT/evidence"
+          sudo dmesg > "$FC_DIAG_ROOT/evidence/host-dmesg-final.txt" || true
+          sudo chown -R "$(id -u):$(id -g)" "$FC_DIAG_ROOT/evidence"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: pr73-firecracker-same-runner-evidence
+          path: ${{ env.FC_DIAG_ROOT }}/evidence
+          retention-days: 7
+          if-no-files-found: warn

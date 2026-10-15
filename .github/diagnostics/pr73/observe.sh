@@ -235,6 +235,12 @@ observe() {
     now=$(mono_seconds); (( now - begin < DEADLINE )) || break
     [[ -z "${OBS_STOP_FILE:-}" || ! -e "$OBS_STOP_FILE" ]] || break
     signature=$(target_signature)
+    if [[ -z "$signature" ]] && (( seen )); then
+      printf 'instance-ended=%s previous_signature=%s ' "$instance" "$previous_signature" >>"$EVIDENCE/observer.log"
+      clock_tag >>"$EVIDENCE/observer.log"
+      seen=0; previous_signature=''; previous=''; failed_since=-1
+      stable_since=$now; numeric_stage=0; failed_stage=0
+    fi
     if [[ -n "$signature" && "$signature" != "$previous_signature" ]]; then
       (( instance += 1 )); seen=1; previous_signature=$signature
       previous=''; stable_since=$now; failed_since=-1; numeric_stage=0; failed_stage=0; dumps=0

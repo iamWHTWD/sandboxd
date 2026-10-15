@@ -1,4 +1,4 @@
-name: PR73 Firecracker same-runner diagnostic
+name: PR73 resource Start position ablation
 
 on:
   push:
@@ -41,8 +41,72 @@ jobs:
           sudo modprobe kvm
           sudo chmod 0666 /dev/kvm
           sudo kvm-ok
-      - name: Build fixed revisions and run A B B A on this runner
-        run: bash .github/diagnostics/pr73/prepare-and-run.sh
+      - name: Build unchanged PR and early Start variant
+        id: build
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh build
+      - name: "Round 01: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 1 early
+      - name: "Round 02: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 2 pr
+      - name: "Round 03: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 3 pr
+      - name: "Round 04: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 4 early
+      - name: "Round 05: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 5 early
+      - name: "Round 06: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 6 pr
+      - name: "Round 07: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 7 pr
+      - name: "Round 08: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 8 early
+      - name: "Round 09: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 9 early
+      - name: "Round 10: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 10 pr
+      - name: "Round 11: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 11 pr
+      - name: "Round 12: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 12 early
+      - name: "Round 13: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 13 early
+      - name: "Round 14: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 14 pr
+      - name: "Round 15: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 15 pr
+      - name: "Round 16: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 16 early
+      - name: "Round 17: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 17 early
+      - name: "Round 18: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 18 pr
+      - name: "Round 19: pr"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 19 pr
+      - name: "Round 20: early"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh round 20 early
+      - name: Finalize ablation results
+        if: always()
+        run: bash .github/diagnostics/pr73/prepare-and-run.sh finish
       - name: Collect dedicated-runner kernel messages
         if: always()
         run: |
@@ -52,7 +116,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: pr73-firecracker-same-runner-evidence
+          name: pr73-start-position-evidence
           path: ${{ env.FC_DIAG_ROOT }}/evidence
           retention-days: 7
           if-no-files-found: warn

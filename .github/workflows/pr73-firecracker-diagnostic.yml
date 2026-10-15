@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     env:
-      FC_DIAG_ROOT: ${{ runner.temp }}/pr73-firecracker-diagnostic
+      FC_DIAG_ROOT: /tmp/pr73-firecracker-diagnostic-${{ github.run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

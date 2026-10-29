@@ -64,6 +64,16 @@ STRESS_ROOTFS="${E2E_STRESS_ROOTFS:-}"
 STRESS_CHECKPOINT="${E2E_STRESS_CHECKPOINT:-0}"
 STRESS_ONLY="${E2E_STRESS_ONLY:-0}"
 HOSTS_ONLY="${E2E_HOSTS_ONLY:-0}"
+HOSTS_REGRESSION="${E2E_HOSTS_REGRESSION:-}"
+HOSTS_CONCURRENCY="${E2E_HOSTS_CONCURRENCY:-0}"
+HOSTS_ROOTFS_KIND="${E2E_HOSTS_ROOTFS_KIND:-erofs}"
+HOSTS_NYDUS_IMAGE="${E2E_HOSTS_NYDUS_IMAGE:-/opt/hosts-regression/bin/nydus-image}"
+HOSTS_DISTILL_FS="${E2E_HOSTS_DISTILL_FS:-/opt/hosts-regression/bin/distill_fs}"
+HOSTS_BASIC_SPEC=""
+HOSTS_DAEMON_CWD=""
+NYDUS_PID=""
+NYDUS_MOUNT=""
+NYDUS_BOOTSTRAP=""
 DISABLE_CGROUP="${E2E_DISABLE_CGROUP:-0}"
 CPU_LIMIT_MODE="${E2E_CPU_LIMIT_MODE:-quota}"
 E2E_RUNTIME="${E2E_RUNTIME:-all}"
@@ -181,6 +191,13 @@ cleanup() {
         kill "${SANDBOXD_PID}" >/dev/null 2>&1
         wait "${SANDBOXD_PID}" >/dev/null 2>&1
     fi
+    if [ -n "${NYDUS_MOUNT}" ] && mountpoint -q "${NYDUS_MOUNT}"; then
+        umount "${NYDUS_MOUNT}" || status=1
+    fi
+    if [ -n "${NYDUS_PID}" ]; then
+        kill "${NYDUS_PID}" >/dev/null 2>&1
+        wait "${NYDUS_PID}" >/dev/null 2>&1
+    fi
     cleanup_cgroups
 
     if [ "${status}" -ne 0 ] && [ -f "${LOG_FILE}" ]; then
@@ -209,11 +226,13 @@ cleanup() {
             tail -200 "${runsc_log}" >&2
         done < <(find /home/akernel/logs/runsc -type f | sort)
     fi
+    trap - EXIT
+    exit "${status}"
 }
 trap cleanup EXIT
 
 check_direct_dns_dependencies() {
-    if [ "${1:-e2e}" != "e2e" ] || [ "${DISABLE_CGROUP}" = "1" ] || [ "${HOSTS_ONLY:-0}" = "1" ]; then
+    if [ "${1:-e2e}" != "e2e" ] || [ "${DISABLE_CGROUP}" = "1" ] || [ "${HOSTS_ONLY:-0}" = "1" ] || [ -n "${HOSTS_REGRESSION:-}" ] || [ "${HOSTS_CONCURRENCY:-0}" != "0" ]; then
         return
     fi
     case "${E2E_RUNTIME}" in
@@ -236,6 +255,28 @@ preflight() {
     [[ "${STRESS_ONLY}" =~ ^[01]$ ]] ||
         fail "E2E_STRESS_ONLY must be 0 or 1"
     [[ "${HOSTS_ONLY}" =~ ^[01]$ ]] || fail "E2E_HOSTS_ONLY must be 0 or 1"
+    [[ "${HOSTS_CONCURRENCY}" =~ ^(0|[2-9]|[1-5][0-9]|6[0-4])$ ]] || fail "E2E_HOSTS_CONCURRENCY must be 0 or 2..64"
+    case "${HOSTS_ROOTFS_KIND}" in erofs|directory) ;; *) fail "E2E_HOSTS_ROOTFS_KIND must be erofs or directory" ;; esac
+    case "${HOSTS_REGRESSION}" in ""|nydus|relative-bind) ;; *) fail "E2E_HOSTS_REGRESSION must be empty, nydus, or relative-bind" ;; esac
+    if [ -n "${HOSTS_REGRESSION}" ]; then
+        [ "${E2E_RUNTIME}" = runsc ] || fail "hosts regressions require E2E_RUNTIME=runsc"
+        [ "${HOSTS_CONCURRENCY}" = 0 ] || fail "select either hosts regression or concurrency"
+        if [ "${HOSTS_REGRESSION}" = nydus ]; then
+            [ -c /dev/fuse ] || fail "Nydus regression requires /dev/fuse"
+            [ -x "${HOSTS_NYDUS_IMAGE}" ] || fail "missing Nydus fixture builder: ${HOSTS_NYDUS_IMAGE}"
+            [ -x "${HOSTS_DISTILL_FS}" ] || fail "missing distill-fs: ${HOSTS_DISTILL_FS}"
+        fi
+    fi
+    if [ "${HOSTS_CONCURRENCY}" != 0 ]; then
+        case "${E2E_RUNTIME}" in runsc|firecracker) ;; *) fail "hosts concurrency requires runsc or firecracker" ;; esac
+        if [ "${E2E_RUNTIME}" = firecracker ] && [ "${HOSTS_ROOTFS_KIND}" = directory ]; then
+            [ "${FIRECRACKER_VIRTIOFS}" = 1 ] || fail "Firecracker directory concurrency requires virtio-fs"
+        fi
+    fi
+    if [ -n "${HOSTS_REGRESSION}" ] || [ "${HOSTS_CONCURRENCY}" != 0 ]; then
+        [ "${HOSTS_ONLY}" = 0 ] && [ "${STRESS_ONLY}" = 0 ] && [ "${NETWORK_SOAK}" = 0 ] || fail "hosts specialized modes cannot be combined with other suite-only modes"
+        command -v python3 >/dev/null || fail "hosts specialized modes require python3"
+    fi
     [[ "${DISABLE_CGROUP}" =~ ^[01]$ ]] || fail "E2E_DISABLE_CGROUP must be 0 or 1"
     [[ "${NETWORK_SOAK}" =~ ^[01]$ ]] || fail "E2E_NETWORK_SOAK must be 0 or 1"
     [[ "${FIRECRACKER_VIRTIOFS}" =~ ^[01]$ ]] ||
@@ -380,6 +421,25 @@ preflight() {
     select_iptables_backend
 }
 
+# virtio-fs restores need a shared writable clone of each 256 MiB guest's
+# memory beside its private disk. Ordinary restore maps saved memory privately.
+# Keep this test capacity separate from each sandbox's 64 MiB storage quota.
+e2e_filestore_size() {
+    if [ "${RUNSC_CHECKPOINT_MODE:-}" = reflink ]; then
+        # Live and saved filestores must stay on the same caller-owned XFS.
+        return
+    fi
+    if [ "${HOSTS_CONCURRENCY}" = 0 ]; then
+        printf '1G\n'
+        return
+    fi
+    local per_instance_mib=128
+    if [ "${E2E_RUNTIME}" = firecracker ] && [ "${FIRECRACKER_VIRTIOFS}" = 1 ]; then
+        per_instance_mib=512
+    fi
+    printf '%sM\n' "$((per_instance_mib * HOSTS_CONCURRENCY + 256))"
+}
+
 write_config() {
     mkdir -p "${CONFIG_DIR}" "${SANDBOXD_ROOT}" "${SANDBOXD_STORE}" "$(dirname "${SOCKET}")" "$(dirname "${LOG_FILE}")"
 
@@ -459,6 +519,13 @@ EOF
         # the storage path is exercised.
         interface_cache_size="${STRESS_CONCURRENCY}"
     fi
+    if [ "${HOSTS_CONCURRENCY}" != 0 ]; then
+        local hosts_capacity=$((2 * HOSTS_CONCURRENCY + 2))
+        if [ "${hosts_capacity}" -gt "${max_instance_num}" ]; then
+            max_instance_num="${hosts_capacity}"
+        fi
+        interface_cache_size="${hosts_capacity}"
+    fi
     case "${E2E_RUNTIME}" in
         all)
             runtime_binaries=$'runsc = "/usr/local/bin/runsc"\nrunc = "/usr/local/bin/runc"'
@@ -482,14 +549,10 @@ EOF
     # firecracker job must keep exercising the unset (default full) path.
     local e2e_fc_checkpoint_mode_cfg=""
     local e2e_runsc_checkpoint_mode_cfg=""
-    local filestore_size_cfg='filestore_dir_size = "1G"'
+    local filestore_size_cfg
+    filestore_size_cfg="filestore_dir_size = \"$(e2e_filestore_size)\""
     if [ -n "${RUNSC_CHECKPOINT_MODE:-}" ]; then
         e2e_runsc_checkpoint_mode_cfg="$(printf 'checkpoint_mode = "%s"' "${RUNSC_CHECKPOINT_MODE:-}")"
-    fi
-    if [ "${RUNSC_CHECKPOINT_MODE:-}" = "reflink" ]; then
-        # Keep live and saved filestores on the same host XFS fixture;
-        # the ordinary bounded ext4 filestore is a different filesystem.
-        filestore_size_cfg='filestore_dir_size = ""'
     fi
     if [ -n "${FIRECRACKER_CHECKPOINT_MODE}" ]; then
         e2e_fc_checkpoint_mode_cfg="$(printf 'checkpoint_mode = "%s"' \
@@ -686,13 +749,16 @@ crash_and_restart_sandboxd() {
 
 start_sandboxd() {
     log "starting sandboxd"
-    /usr/local/bin/sandboxd \
-        --root "${SANDBOXD_HOME}" \
-        --config "${CONFIG_FILE}" \
-        --socket "${SOCKET}" \
-        --log-level debug \
-        --log-file "${LOG_FILE}" \
-        --http-address "127.0.0.1:23001" &
+    (
+        if [ -n "${HOSTS_DAEMON_CWD}" ]; then cd "${HOSTS_DAEMON_CWD}"; fi
+        exec /usr/local/bin/sandboxd \
+            --root "${SANDBOXD_HOME}" \
+            --config "${CONFIG_FILE}" \
+            --socket "${SOCKET}" \
+            --log-level debug \
+            --log-file "${LOG_FILE}" \
+            --http-address "127.0.0.1:23001"
+    ) &
     SANDBOXD_PID=$!
 
     local i
@@ -2756,12 +2822,110 @@ run_cgroup_disabled_checks() {
     fi
 }
 
+# Build these fixtures inside the test container; no host mount propagation or
+# registry is needed. Caller-supplied tools must match the documented pins.
+prepare_hosts_regression() {
+    [ -n "${HOSTS_REGRESSION}" ] || return 0
+    local fixture="${SANDBOXD_HOME}/hosts-regression"
+    mkdir "${fixture}"
+    if [ "${HOSTS_REGRESSION}" = relative-bind ]; then
+        HOSTS_BASIC_SPEC="${fixture}/base-spec.json"
+        HOSTS_DAEMON_CWD="${fixture}/daemon-cwd"
+        mkdir "${HOSTS_DAEMON_CWD}"
+        cat > "${HOSTS_BASIC_SPEC}" <<'JSON'
+{
+  "ociVersion": "1.0.0",
+  "process": {
+    "user": {"uid": 0, "gid": 0}, "args": ["/bin/sh"],
+    "env": ["PATH=/bin:/usr/bin"], "cwd": "/"
+  },
+  "root": {"path": "rootfs", "readonly": true},
+  "hostname": "akernel",
+  "mounts": [
+    {"destination": "/proc", "type": "proc", "source": "proc"},
+    {"destination": "/dev", "type": "tmpfs", "source": "tmpfs"},
+    {"destination": "/sys", "type": "sysfs", "source": "sysfs", "options": ["nosuid", "noexec", "nodev", "ro"]},
+    {"destination": "/relative-proof", "type": "bind", "source": "../hosts-relative-shared", "options": ["rbind", "ro"]}
+  ],
+  "linux": {"namespaces": [{"type": "pid"}, {"type": "network"}, {"type": "ipc"}, {"type": "uts"}, {"type": "mount"}]}
+}
+JSON
+        python3 - "${CONFIG_FILE}" "${HOSTS_BASIC_SPEC}" <<'PYTHON'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = '[plugin.runtime.basic_spec]\nrunsc = ""'
+assert text.count(old) == 1, "missing or ambiguous base spec setting"
+path.write_text(text.replace(old, '[plugin.runtime.basic_spec]\nrunsc = ' + json.dumps(sys.argv[2])))
+PYTHON
+        return
+    fi
+    local artifacts="${fixture}/artifacts" cache="${fixture}/cache" attempt
+    NYDUS_BOOTSTRAP="${artifacts}/bootstrap"
+    NYDUS_MOUNT="${fixture}/root"
+    mkdir "${artifacts}" "${cache}" "${NYDUS_MOUNT}"
+    python3 - "${ROOTFS}" <<'PYTHON'
+import os
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+for path in [root, *root.rglob("*")]:
+    attrs = os.listxattr(path, follow_symlinks=False)
+    assert not attrs, f"Nydus no-xattr fixture source contains attributes: {path}: {attrs}"
+PYTHON
+    "${HOSTS_NYDUS_IMAGE}" create --fs-version 5 --bootstrap "${NYDUS_BOOTSTRAP}" \
+        --blob-dir "${artifacts}" --output-json "${fixture}/build.json" "${ROOTFS}" \
+        >"${fixture}/build.log" 2>&1
+    jq -n --arg dir "${artifacts}" '{type: "localfs", localfs: {dir: $dir}}' > "${fixture}/backend.json"
+    "${HOSTS_DISTILL_FS}" mount --src nydus --name hosts-no-xattr \
+        --bootstrap "${NYDUS_BOOTSTRAP}" --cfg "${fixture}/backend.json" \
+        --cache-dir "${cache}" --mountpoint "${NYDUS_MOUNT}" >"${fixture}/distill-fs.log" 2>&1 &
+    NYDUS_PID=$!
+    for attempt in $(seq 1 100); do
+        kill -0 "${NYDUS_PID}" 2>/dev/null || fail "Nydus mount process exited; see ${fixture}/distill-fs.log"
+        if mountpoint -q "${NYDUS_MOUNT}" && [ -x "${NYDUS_MOUNT}/bin/sh" ]; then return; fi
+        sleep 0.1
+    done
+    fail "Nydus mount did not become ready"
+}
+
+run_hosts_regression() {
+    CASE_MODE="${HOSTS_REGRESSION}" CASE_ID="${HOSTS_REGRESSION}-${RUNSC_PLATFORM}" \
+        TEST_DIR="${SANDBOXD_HOME}/hosts-regression/results" \
+        ROOTFS="${NYDUS_MOUNT:-${ROOTFS}}" SOCKET="${SOCKET}" \
+        SANDBOXD_ROOT="${SANDBOXD_ROOT}" SANDBOXD_PID="${SANDBOXD_PID}" \
+        DISTILL_FS_PID="${NYDUS_PID}" NYDUS_BOOTSTRAP="${NYDUS_BOOTSTRAP}" BASIC_SPEC="${HOSTS_BASIC_SPEC}" \
+        bash /usr/local/bin/sandboxd-writable-hosts-regressions
+}
+
+run_hosts_concurrency() {
+    local lower="${EROFS_ROOTFS}"
+    if [ "${HOSTS_ROOTFS_KIND}" = directory ]; then lower="${ROOTFS}"; fi
+    COUNT="${HOSTS_CONCURRENCY}" RUNTIME="${E2E_RUNTIME}" ROOTFS="${lower}" \
+        CASE_ID="${E2E_RUNTIME}-${RUNSC_PLATFORM}-${HOSTS_ROOTFS_KIND}-n${HOSTS_CONCURRENCY}" \
+        TEST_DIR="${SANDBOXD_HOME}/hosts-concurrency" SOCKET="${SOCKET}" SANDBOXD_ROOT="${SANDBOXD_ROOT}" FILESTORE_ROOT="${FILESTORE}" \
+        bash /usr/local/bin/sandboxd-writable-hosts-concurrency
+}
+
 run_e2e() {
     preflight
     cleanup_cgroups
     write_config
     prepare_rootfs
+    prepare_hosts_regression
     start_sandboxd
+    if [ -n "${HOSTS_REGRESSION}" ]; then
+        run_hosts_regression
+        log "writable hosts ${HOSTS_REGRESSION} regression passed"
+        return
+    fi
+    if [ "${HOSTS_CONCURRENCY}" != 0 ]; then
+        run_hosts_concurrency
+        log "writable hosts concurrency passed"
+        return
+    fi
     if [ "${HOSTS_ONLY}" = 1 ]; then
         run_writable_hosts_suite
         log "writable hosts RPC e2e passed"

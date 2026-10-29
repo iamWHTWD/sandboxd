@@ -27,6 +27,21 @@ const (
 	maxDirectoryXattrsBytes = 1 << 20
 )
 
+type hostsXattrPolicy uint8
+
+const (
+	// Direct EROFS is parsed independently by runsc, so a host-kernel xattr
+	// limitation must never cause image metadata to be silently discarded.
+	hostsXattrsRequired hostsXattrPolicy = iota
+	// Directory lowers expose the same metadata to sandboxd and the gofer.
+	// A backend without listxattr support therefore has no visible xattrs.
+	hostsXattrsVisible
+)
+
+func (p hostsXattrPolicy) unavailable(err error) bool {
+	return p == hostsXattrsVisible && (errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.ENOSYS))
+}
+
 // readHostsSeedHeaders inspects the original lower, never the OCI placeholder
 // or the private host overlay's synthesized mount-point directories. Nothing
 // is written through an image-owned path. Restore reuses the saved tar instead.
@@ -38,7 +53,9 @@ func (r *Handler) readHostsSeedHeaders(bundle string, spec *runtimecore.Spec) (h
 	if !filepath.IsAbs(lower) {
 		lower = filepath.Join(bundle, lower)
 	}
+	xattrPolicy := hostsXattrsVisible
 	if source, image := runscNVProxyEROFSImageSource(spec); image {
+		xattrPolicy = hostsXattrsRequired
 		lower = filepath.Join(bundle, hostsMetadataLowerDir)
 		if err := cleanupHostsMetadataMount(bundle); err != nil {
 			return nil, err
@@ -60,7 +77,7 @@ func (r *Handler) readHostsSeedHeaders(bundle string, spec *runtimecore.Spec) (h
 		return nil, fmt.Errorf("open hosts lower: %w", err)
 	}
 	defer root.Close()
-	rootHeader, err := hostsDirectoryHeader(root, "./")
+	rootHeader, err := hostsDirectoryHeader(root, "./", xattrPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +91,7 @@ func (r *Handler) readHostsSeedHeaders(bundle string, spec *runtimecore.Spec) (h
 	}
 	etc := os.NewFile(uintptr(etcFD), filepath.Join(lower, "etc"))
 	defer etc.Close()
-	etcHeader, err := hostsDirectoryHeader(etc, "./etc/")
+	etcHeader, err := hostsDirectoryHeader(etc, "./etc/", xattrPolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +113,7 @@ func cleanupHostsMetadataMount(bundle string) error {
 	return os.RemoveAll(target)
 }
 
-func hostsDirectoryHeader(file *os.File, name string) (*tar.Header, error) {
+func hostsDirectoryHeader(file *os.File, name string, xattrPolicy hostsXattrPolicy) (*tar.Header, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -117,7 +134,7 @@ func hostsDirectoryHeader(file *os.File, name string) (*tar.Header, error) {
 	header.Uname, header.Gname = "", ""
 	// Preserve setuid/setgid/sticky bits as well as ordinary permissions.
 	header.Mode = int64(stat.Mode & 07777)
-	header.PAXRecords, err = hostsDirectoryXattrs(int(file.Fd()))
+	header.PAXRecords, err = hostsDirectoryXattrs(int(file.Fd()), xattrPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("read metadata for seed parent %q: %w", name, err)
 	}
@@ -146,32 +163,44 @@ func readDirectoryXattr(fd int, name string) ([]byte, error) {
 	return nil, errors.New("directory xattr changed repeatedly during seed creation")
 }
 
-func hostsDirectoryXattrs(fd int) (map[string]string, error) {
+func listHostsDirectoryXattrs(fd int, policy hostsXattrPolicy, list func(int, []byte) (int, error)) ([]byte, error) {
 	var names []byte
 	for attempt := 0; attempt < 3; attempt++ {
-		size, err := unix.Flistxattr(fd, nil)
+		size, err := list(fd, nil)
 		if err != nil {
-			// ENOTSUP is not proof that a direct EROFS image has no xattrs:
-			// runsc parses that image independently of the host kernel.
+			if policy.unavailable(err) {
+				return nil, nil
+			}
 			return nil, fmt.Errorf("list directory xattrs: %w", err)
 		}
 		if size > maxDirectoryXattrsBytes {
 			return nil, errors.New("directory xattr names exceed seed metadata limit")
 		}
 		names = make([]byte, size)
-		n, err := unix.Flistxattr(fd, names)
+		n, err := list(fd, names)
 		if errors.Is(err, unix.ERANGE) || (err == nil && n > len(names)) {
 			names = nil
 			continue
 		}
 		if err != nil {
-			return nil, err
+			if policy.unavailable(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("list directory xattrs: %w", err)
 		}
 		names = names[:n]
 		break
 	}
 	if names == nil {
 		return nil, errors.New("directory xattr list changed repeatedly during seed creation")
+	}
+	return names, nil
+}
+
+func hostsDirectoryXattrs(fd int, policy hostsXattrPolicy) (map[string]string, error) {
+	names, err := listHostsDirectoryXattrs(fd, policy, unix.Flistxattr)
+	if err != nil {
+		return nil, err
 	}
 	records := make(map[string]string)
 	total := len(names)

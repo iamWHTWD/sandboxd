@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +250,61 @@ command() { printf 'unexpected dependency check\n'; return 1; }
 	output, err := runE2EHelper(t, script)
 	if err != nil || output != "passed\n" {
 		t.Fatalf("hosts-only used direct DNS fixture: err=%v output=%s", err, output)
+	}
+}
+
+// A restored virtio-fs guest owns a shared memory clone as well as its disk.
+// The test fixture must not mistake filestore ENOSPC for a runtime regression.
+func TestHostsConcurrencyFilestoreBudget(t *testing.T) {
+	function := e2eFunctions(t, "e2e_filestore_size")
+	for _, tc := range []struct {
+		name, runtime, checkpointMode string
+		count, virtiofs               int
+	}{
+		{"runsc_default", "runsc", "", 0, 0},
+		{"firecracker_default", "firecracker", "", 0, 0},
+		{"virtiofs_default", "firecracker", "", 0, 1},
+		{"reflink_default", "runsc", "reflink", 0, 0},
+		{"reflink_concurrent", "runsc", "reflink", 8, 0},
+		{"runsc_concurrent", "runsc", "", 16, 0},
+		{"firecracker_concurrent", "firecracker", "", 8, 0},
+		{"virtiofs_four", "firecracker", "", 4, 1},
+		{"virtiofs_eight", "firecracker", "", 8, 1},
+		{"virtiofs_maximum", "firecracker", "", 64, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := fmt.Sprintf("HOSTS_CONCURRENCY=%d\nE2E_RUNTIME=%q\nFIRECRACKER_VIRTIOFS=%d\nRUNSC_CHECKPOINT_MODE=%q\n", tc.count, tc.runtime, tc.virtiofs, tc.checkpointMode)
+			output, err := runE2EHelper(t, script+function+"e2e_filestore_size\n")
+			if err != nil {
+				t.Fatalf("filestore size: %v: %s", err, output)
+			}
+			size := strings.TrimSpace(output)
+			if tc.checkpointMode == "reflink" {
+				if size != "" {
+					t.Fatalf("reflink must use caller filesystem, got %q", size)
+				}
+				return
+			}
+			if tc.count == 0 {
+				if size != "1G" {
+					t.Fatalf("ordinary profile changed: got %q, want 1G", size)
+				}
+				return
+			}
+			if !strings.HasSuffix(size, "M") {
+				t.Fatalf("concurrency size must use MiB, got %q", size)
+			}
+			capacity, err := strconv.Atoi(strings.TrimSuffix(size, "M"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			minimum := tc.count*64 + 256 // private disks plus filesystem headroom
+			if tc.virtiofs == 1 {
+				minimum += tc.count * 256 // shared writable live-memory clones
+			}
+			if capacity < minimum {
+				t.Fatalf("capacity %d MiB cannot hold %d guests; need at least %d MiB", capacity, tc.count, minimum)
+			}
+		})
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -206,5 +207,89 @@ func TestHostsMetadataCleanupRejectsSymlink(t *testing.T) {
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatalf("changed symlink target: %v", err)
+	}
+}
+
+// Nydus without HAS_XATTR returns ENOSYS; Linux FUSE exposes EOPNOTSUPP
+// (the same errno as ENOTSUP). Check both calls and retries: unsupported
+// directory metadata is empty, but direct EROFS and other errors stay fatal.
+func TestHostsDirectoryXattrBackendPolicy(t *testing.T) {
+	for _, policy := range []struct {
+		name  string
+		value hostsXattrPolicy
+	}{
+		{"directory", hostsXattrsVisible},
+		{"direct-erofs", hostsXattrsRequired},
+	} {
+		for _, cause := range []error{unix.ENOTSUP, unix.ENOSYS, unix.EACCES, unix.EIO, errors.New("backend failure")} {
+			for failCall := 1; failCall <= 4; failCall++ {
+				t.Run(fmt.Sprintf("%s/%s/call-%d", policy.name, cause, failCall), func(t *testing.T) {
+					calls := 0
+					list := func(fd int, names []byte) (int, error) {
+						if fd != 123 {
+							t.Fatalf("unexpected fd %d", fd)
+						}
+						calls++
+						if calls == failCall {
+							return 0, fmt.Errorf("backend: %w", cause)
+						}
+						if calls == 2 {
+							return 0, unix.ERANGE
+						}
+						return len("user.fixture\x00"), nil
+					}
+					names, err := listHostsDirectoryXattrs(123, policy.value, list)
+					allowEmpty := policy.value == hostsXattrsVisible && (cause == unix.ENOTSUP || cause == unix.ENOSYS)
+					if allowEmpty {
+						if err != nil || len(names) != 0 {
+							t.Fatalf("unsupported directory xattrs: names=%q err=%v", names, err)
+						}
+					} else if !errors.Is(err, cause) {
+						t.Fatalf("metadata failure was lost: got %v want %v", err, cause)
+					}
+					if calls != failCall {
+						t.Fatalf("calls=%d want %d", calls, failCall)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestHostsDirectoryXattrListRetries(t *testing.T) {
+	for _, policy := range []hostsXattrPolicy{hostsXattrsVisible, hostsXattrsRequired} {
+		for _, retry := range []string{"erange", "zero-size-race"} {
+			for _, exhausted := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%d/%s/exhausted-%t", policy, retry, exhausted), func(t *testing.T) {
+					calls := 0
+					const want = "user.fixture\x00"
+					list := func(_ int, names []byte) (int, error) {
+						calls++
+						attempt := (calls - 1) / 2
+						if calls%2 == 1 {
+							if retry == "zero-size-race" && (exhausted || attempt == 0) {
+								return 0, nil
+							}
+							return len(want), nil
+						}
+						if exhausted || attempt == 0 {
+							if retry == "erange" {
+								return 0, unix.ERANGE
+							}
+							return len(want), nil
+						}
+						return copy(names, want), nil
+					}
+					names, err := listHostsDirectoryXattrs(123, policy, list)
+					if exhausted {
+						if err == nil || calls != 6 {
+							t.Fatalf("unbounded or ignored metadata changes: calls=%d err=%v", calls, err)
+						}
+					} else if err != nil || string(names) != want || calls != 4 {
+						t.Fatalf("retry lost metadata: names=%q calls=%d err=%v", names, calls, err)
+					}
+				})
+			}
+		}
 	}
 }

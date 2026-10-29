@@ -62,6 +62,7 @@ RUN apt-get update && \
         mount \
         netcat-openbsd \
         procps \
+        python3 \
         xfsprogs \
         zstd && \
     rm -rf /var/lib/apt/lists/* && \
@@ -80,6 +81,8 @@ COPY output/network-policy-client /usr/local/bin/network-policy-client
 COPY output/checkpoint-restore /usr/local/bin/checkpoint-restore
 COPY test/e2e/e2e-run.sh /usr/local/bin/sandboxd-e2e-run
 COPY test/e2e/writable-hosts.sh /usr/local/bin/sandboxd-writable-hosts
+COPY test/e2e/writable-hosts-regressions.sh /usr/local/bin/sandboxd-writable-hosts-regressions
+COPY test/e2e/writable-hosts-concurrency.sh /usr/local/bin/sandboxd-writable-hosts-concurrency
 COPY third_party/firecracker-candidate/ /tmp/firecracker-candidate/
 COPY third_party/install-gvisor.sh /usr/local/libexec/install-gvisor.sh
 COPY test/e2e/host-mount-rw.sh /usr/local/bin/sandboxd-host-mount-rw

@@ -178,6 +178,44 @@ Set `RUN_UNIT_TESTS=0` to skip unit tests while rerunning a privileged scenario.
 
 For a Firecracker virtio-fs storage soak, set `E2E_STRESS_ROOTFS_HOST` to a host directory that contains executable `/bin/sh`, `/stress-data/large.bin`, `/stress-data/small.master`, and a populated `/stress-data/small` directory. The harness mounts it read-only into the E2E container, continuously verifies and scans it from every concurrent guest, and keeps each guest's writes in its private layer. `E2E_STRESS_CHECKPOINT=1` checkpoints and restores one guest in every round while the remaining guests continue their read workload. The host directory can be a distill-fs Nydus FUSE mount to exercise the complete Nydus-to-virtio-fs data path. Set `E2E_STRESS_ONLY=1` to skip the ordinary runtime cases when iterating on a soak; it requires Firecracker virtio-fs and at least one stress round.
 
+## Writable hosts regressions and concurrency
+
+The following opt-in modes run against a dedicated test daemon and return nonzero when a prerequisite or assertion fails. They do not run the ordinary runtime suite or Redis network soak. `make e2e-runtime-case` still builds the selected runtime image; build project binaries first with `make e2e-runtime-binaries`. Use `E2E_KEEP_HOME_FIXTURE=1` to retain evidence under the runner's printed fixture path.
+
+Check bundle-relative bind semantics with a daemon working directory that differs from the bundle directory:
+
+```bash
+E2E_CASE=runsc-systrap E2E_HOSTS_REGRESSION=relative-bind \
+  E2E_KEEP_HOME_FIXTURE=1 make e2e-runtime-case
+```
+
+The runner installs a complete custom OCI base spec with `../hosts-relative-shared` bound at `/relative-proof`. Both the correct bundle-relative source and the incorrect daemon-CWD-relative source exist and contain different markers. The test verifies the correct marker on fresh start and after source deletion and snapshot restore, so an accidental bind of another existing directory is observable.
+
+The Nydus regression requires `/dev/fuse`, a Linux static `nydus-image` v2.4.0 executable and the verified distill-fs release executable selected by the consumer being qualified. The fixture builder's official `nydus-static-v2.4.0-linux-amd64.tgz` archive has SHA-256 `e4f7de672ced6031c13c3c38a599993f8a8103b0cf85f9b0783f5f5fa7c8b3dc`. Use `third_party/runtime-versions.env` for sandboxd's distill-fs release; when validating AKernel packaging, use its `builder/distill-fs-versions.env`. These tools are explicit test inputs; the runner does not download unverified replacements.
+
+```bash
+E2E_CASE=runsc-systrap E2E_HOSTS_REGRESSION=nydus \
+  E2E_HOSTS_NYDUS_IMAGE_HOST=/absolute/path/to/verified/nydus-image \
+  E2E_HOSTS_DISTILL_FS_HOST=/absolute/path/to/verified/distill_fs \
+  E2E_KEEP_HOME_FIXTURE=1 make e2e-runtime-case
+```
+
+The runner creates a RAFS v5 bootstrap from its BusyBox root and serves local blobs through a test-owned distill-fs process. It checks the actual process arguments and FUSE mount and requires `flistxattr` on both `/` and `/etc` to report `EOPNOTSUPP`/`ENOSYS`. A normal directory returning an empty xattr list does not satisfy this regression. Both regression modes check first-process hosts contents and ownership, append/`sed -i`/rename, checkpoint/delete/restore without entrypoint replay, unchanged host/lower hosts and seed metadata, and final sandbox/bundle cleanup. `hosts-regression/` retains prerequisite proofs, request/response JSON and snapshot hashes.
+
+Run bounded concurrent creation, writes, checkpoints and restore with runsc or Firecracker:
+
+```bash
+E2E_CASE=runsc-systrap E2E_HOSTS_CONCURRENCY=16 \
+  E2E_HOSTS_ROOTFS_KIND=directory E2E_KEEP_HOME_FIXTURE=1 make e2e-runtime-case
+
+E2E_CASE=firecracker E2E_HOSTS_CONCURRENCY=8 \
+  E2E_HOSTS_ROOTFS_KIND=erofs E2E_KEEP_HOME_FIXTURE=1 make e2e-runtime-case
+```
+
+`E2E_HOSTS_CONCURRENCY` accepts 2 through 64 (`0` disables this mode). Increase it in stages within the test host's CPU, memory and disk budget; accepting a value is not a capacity guarantee. `E2E_HOSTS_ROOTFS_KIND` defaults to `erofs`; Firecracker directory roots require `E2E_CASE=firecracker-virtiofs`. The runner reserves at least `2 * count + 2` sandbox admission slots and matching reusable network capacity. Its non-reflink filestore budget is `128 * count + 256` MiB normally and `512 * count + 256` MiB for Firecracker virtio-fs: each restored virtio-fs guest needs a shared writable clone of its 256 MiB memory beside its private disk. This fixture capacity is separate from each sandbox's 64 MiB storage quota; ordinary profiles retain the 1 GiB default, and reflink profiles retain the caller-owned filesystem. The test releases worker barriers together, records operation timing, checks private per-sandbox hosts, independently restores a shared snapshot, mixes valid and corrupt restore requests, verifies checkpoint/lower immutability, and compares sandbox/bundle/filestore state before and after cleanup. Results and per-worker logs remain in `hosts-concurrency/`.
+
+The low-level scripts can also run inside another isolated test container: `writable-hosts-regressions.sh` requires `CASE_MODE`, `TEST_DIR`, `ROOTFS`, `SANDBOXD_ROOT`, and `SANDBOXD_PID`; Nydus additionally needs `DISTILL_FS_PID` and `NYDUS_BOOTSTRAP`, while relative bind needs `BASIC_SPEC`. `writable-hosts-concurrency.sh` requires a fresh `TEST_DIR`, `ROOTFS`, `SANDBOXD_ROOT`, and `FILESTORE_ROOT`; set `RUNTIME`, `COUNT`, and `SOCKET` for that daemon. Do not share either test daemon with unrelated workloads.
+
 ## Host requirements
 
 - an accessible Docker daemon;

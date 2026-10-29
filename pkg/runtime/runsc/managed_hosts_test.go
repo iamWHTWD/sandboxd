@@ -7,6 +7,7 @@ package runsc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -241,4 +242,83 @@ func TestManagedHostsHandlerRejectsOverlappingArtifactWithoutCleanup(t *testing.
 	if client.deleted || client.checkpoints != 0 {
 		t.Fatal("rejected operation reached runtime or cleanup")
 	}
+}
+
+func TestManagedHostsPreserveBundleRelativeMountsAcrossRestore(t *testing.T) {
+	client := &hostsLifecycleClient{}
+	h, start, bundle := hostsHandlerFixture(t, "source", client)
+	spec := h.ociLoader.(staticOciLoader).spec
+	// Both resolutions exist: the regression must not merely fail because
+	// daemon cwd has no matching source; it can silently mount the wrong one.
+	daemon := filepath.Join(t.TempDir(), "daemon")
+	if err := os.Mkdir(daemon, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(daemon)
+	for _, root := range []string{filepath.Dir(bundle), filepath.Dir(daemon)} {
+		if err := os.Mkdir(filepath.Join(root, "shared"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "shared", "origin"), []byte(root), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "shared.erofs"), []byte(root), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range []string{"bind", "erofs"} {
+		if err := os.Mkdir(filepath.Join(spec.Root.Path, kind), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec.Mounts = []runtimecore.Mount{
+		{Type: "bind", Source: "../shared", Destination: "/bind", Options: []string{"ro", "bind"}},
+		{Type: "erofs", Source: "../shared.erofs", Destination: "/erofs", Options: []string{"ro"}},
+	}
+	freshSpec := spec.DeepCopy()
+	assertMounts := func(bundle string) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(bundle, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved runtimecore.Spec
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(saved.Mounts, freshSpec.Mounts) {
+			t.Fatalf("bundle-relative mount sources changed: %+v", saved.Mounts)
+		}
+		for _, mount := range saved.Mounts {
+			// The pinned runsc fixSpec resolves each relative source against
+			// the bundle, regardless of the daemon or child working directory.
+			resolved := filepath.Join(bundle, mount.Source)
+			if mount.Type == "bind" {
+				resolved = filepath.Join(resolved, "origin")
+			}
+			origin, err := os.ReadFile(resolved)
+			if err != nil || string(origin) != filepath.Dir(bundle) {
+				t.Fatalf("wrong source for %s: %q err=%v", mount.Type, origin, err)
+			}
+		}
+	}
+	if err := h.Start(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	assertMounts(bundle)
+	checkpoint := filepath.Join(t.TempDir(), "checkpoint")
+	if err := h.Checkpoint(context.Background(), runtimecore.CheckpointConfig{ID: start.ID, Directory: checkpoint}); err != nil {
+		t.Fatal(err)
+	}
+	targetBundle := filepath.Join(h.sandboxRoot, "target")
+	if err := os.Mkdir(targetBundle, 0755); err != nil {
+		t.Fatal(err)
+	}
+	target := &Handler{runsc: &hostsLifecycleClient{}, sandboxRoot: h.sandboxRoot, filestoreDir: h.filestoreDir, ociLoader: staticOciLoader{bundlePath: targetBundle, spec: freshSpec}}
+	restore := start
+	restore.ID, restore.InitialFiles, restore.ManagedHosts, restore.CheckpointDir = "target", nil, nil, checkpoint
+	if err := target.Restore(context.Background(), restore); err != nil {
+		t.Fatal(err)
+	}
+	assertMounts(targetBundle)
 }

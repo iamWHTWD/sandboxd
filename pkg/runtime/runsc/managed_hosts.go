@@ -185,18 +185,9 @@ func finalizeManagedHosts(bundle string, spec *runtimecore.Spec, state *runtimec
 			spec.Annotations = make(map[string]string)
 		}
 		spec.Annotations[state.Seed.AnnotationKey] = state.Seed.AnnotationValue
-		// OCI root paths are bundle-relative. Bind sources and rootfs image
-		// annotations are host paths and must keep their pre-chdir meaning.
-		for i := range spec.Mounts {
-			mount := &spec.Mounts[i]
-			if mount.Source != "" && (mount.Type == "bind" || mount.Type == "erofs") && !filepath.IsAbs(mount.Source) {
-				absolute, err := filepath.Abs(mount.Source)
-				if err != nil {
-					return err
-				}
-				mount.Source = absolute
-			}
-		}
+		// Leave OCI root and mount sources bundle-relative, as runsc fixSpec
+		// resolves them independently of its working directory. Annotation
+		// and flag host paths retain their original daemon-relative meaning.
 		for key, value := range spec.Annotations {
 			if name, ok := strings.CutPrefix(key, "dev.gvisor.flag."); ok {
 				absolute, err := absoluteRunscPathFlag("--"+name, value)

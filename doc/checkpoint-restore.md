@@ -46,7 +46,9 @@ in progress for a source sandbox at a time.
 `checkpoint_dir` must be absolute, must not be `/`, and must not contain
 symbolic links. Its parent must already exist. The leaf may be absent, in which
 case sandboxd creates it, or it may be an existing empty directory. sandboxd
-never overwrites a non-empty directory.
+never overwrites a non-empty directory. Runsc output must remain outside its source bundle, and restore inputs must remain separate from the target bundle.
+
+Concurrent runsc checkpoints in the same daemon must use disjoint output directories. While a runsc output directory is reserved, another runsc request for that directory or any ancestor or descendant fails before writing output. The reservation remains held through failure cleanup so a rejected request cannot delete another request's artifacts. Other runtimes retain their existing sandbox-level exclusion.
 
 The directory is the artifact boundary. Its contents are opaque and specific
 to the runtime that created them.
@@ -64,6 +66,14 @@ Restore detects this artifact layout independently of the current save mode. Bef
 Sharing applies to writable-file extents, not the independently saved application-memory pages. Logical file lengths and ordinary summed `du` output do not measure unique physical storage when extents are shared. Measure filesystem usage and shared extents, including unlinked live filestores, when evaluating savings. Host directory bind contents remain caller-owned and are not captured or rolled back by this mechanism. Only anonymous disk-backed filestores are supported; self-overlay backing must not be used for these snapshots. Private tmpfs filestores require the matching gVisor anonymous-filestore mount hints.
 
 Save and restore must use matching runtime builds. Drain sandboxes before replacing the runtime bundle; do not assume old saved state remains compatible across a gVisor upgrade. Install the complete checksum-pinned gVisor archive with its matching helpers, rather than replacing runsc alone.
+
+## Managed hosts state
+
+The [sandbox hosts file contract](runtime.md#sandbox-hosts-file) defines runsc initialization, permissions and mount precedence. Writes, replacement, truncation and deletion of managed `/etc/hosts` follow the private root filesystem's checkpoint state. Restore retains the saved contents and existence state without regenerating entries for the newly allocated IP address. Caller-owned mount contents retain their external-storage contract.
+
+A runsc checkpoint carries `managed-hosts.json`, recording the schema, runtime, effective root mode, and hosts layout. Private-rootfs checkpoints also contain the original immutable `rootfs-seed.tar` and its SHA-256. This seed supplies creation-time dependencies, not the current hosts content. Restore copies it into the new bundle, keeps the same relative annotation, and loads saved native state without replaying initialization. Keep these files with the complete checkpoint, outside the separately managed `filestores/` directory. Deleting the source must not delete caller-owned copies; each restored sandbox retains its own initialization dependencies for later checkpoints.
+
+Runsc snapshots made before this schema retain the old preparation path and mount priority; they are not converted to writable hosts. An absent sidecar is only a legacy candidate: native spec validation still rejects a checkpoint whose saved seed annotation has been removed. Invalid sidecars, missing seeds, digest failures, or requested changes to the saved runtime, root mode or mount ownership fail explicitly. New-layout snapshots are not promised to work with old sandboxd versions. This does not relax the matching-runtime-build requirement. Firecracker and other runtimes do not opt into this hosts sidecar contract.
 
 ## Checkpoint output synchronization
 

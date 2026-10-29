@@ -110,6 +110,7 @@ func TestPrepareSandboxFilesInjectsImageProcessConfig(t *testing.T) {
 		nil,
 		want,
 		target,
+		sandboxHostsPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +149,7 @@ func TestPrepareSandboxFilesRejectsImageProcessMountConflict(t *testing.T) {
 			[]*runtime.Mount{{Target: target}},
 			&imageProcessSpec{Version: 1, Args: []string{}, Cwd: "/"},
 			configTarget,
+			sandboxHostsPolicy{},
 		)
 		if err == nil || !strings.Contains(err.Error(), "managed image process config") {
 			t.Fatalf("mount target %q error = %v", target, err)
@@ -199,6 +201,7 @@ func TestPrepareSandboxFiles(t *testing.T) {
 		nil,
 		nil,
 		"",
+		sandboxHostsPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +242,7 @@ func TestPrepareSandboxFilesHonorsParentMount(t *testing.T) {
 		[]*runtime.Mount{explicit},
 		nil,
 		"",
+		sandboxHostsPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +265,7 @@ func TestPrepareSandboxFilesHonorsBaseResolverMount(t *testing.T) {
 		nil,
 		nil,
 		"",
+		sandboxHostsPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -298,6 +303,7 @@ func TestPrepareSandboxFilesUsesManagedResolverForNetworkACL(t *testing.T) {
 		nil,
 		nil,
 		"",
+		sandboxHostsPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -371,6 +377,7 @@ func TestPrepareSandboxFilesSelectsResolverByDNSMode(t *testing.T) {
 				nil,
 				nil,
 				"",
+				sandboxHostsPolicy{},
 			)
 			if test.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantError) {
@@ -482,6 +489,7 @@ func TestPrepareSandboxFilesWithoutNetworkACLOnACLNode(t *testing.T) {
 				mounts,
 				nil,
 				"",
+				sandboxHostsPolicy{},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -527,8 +535,220 @@ func TestPrepareSandboxFilesRejectsInvalidHostname(t *testing.T) {
 		[]*runtime.Mount{{Target: "/etc"}},
 		nil,
 		"",
+		sandboxHostsPolicy{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("invalid hostname error = %v", err)
+	}
+}
+
+func managedHostsTestService(t *testing.T) *sandboxService {
+	t.Helper()
+	resolver := filepath.Join(t.TempDir(), "resolver")
+	if err := os.WriteFile(resolver, []byte("nameserver 1.1.1.1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return &sandboxService{config: config.Config{
+		RootDir: t.TempDir(), PluginConfig: config.PluginConfig{RuntimeConfig: config.RuntimeConfig{ResolvConfPath: resolver}},
+	}}
+}
+
+func TestPrepareManagedHostsLayouts(t *testing.T) {
+	for _, test := range []struct {
+		name, runtime string
+		readonly      bool
+		mount         string
+		baseMount     string
+		layout        svc.HostsLayout
+		initial       bool
+		legacy        bool
+	}{
+		{name: "runsc", runtime: "runsc", layout: svc.HostsLayoutPrivateRootfs, initial: true},
+		{name: "firecracker unchanged", runtime: "firecracker", legacy: true},
+		{name: "readonly", runtime: "runsc", readonly: true, layout: svc.HostsLayoutLegacy, legacy: true},
+		{name: "explicit hosts", runtime: "runsc", mount: "/etc/hosts", layout: svc.HostsLayoutExternal},
+		{name: "parent owns", runtime: "runsc", mount: "/etc", layout: svc.HostsLayoutExternal},
+		{name: "base owns", runtime: "runsc", baseMount: "/etc", layout: svc.HostsLayoutExternal},
+		{name: "external before readonly", runtime: "runsc", readonly: true, mount: "/etc/hosts", layout: svc.HostsLayoutExternal},
+		{name: "runc unchanged", runtime: "runc", legacy: true},
+		{name: "kata unchanged", runtime: "kata", legacy: true},
+		{name: "pvm unchanged", runtime: "firecracker-pvm", legacy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := managedHostsTestService(t)
+			defaults := svc.SandboxDefaults{Hostname: "configured-host"}
+			if test.baseMount != "" {
+				defaults.MountDestinations = []string{test.baseMount}
+			}
+			var mounts []*runtime.Mount
+			if test.mount != "" {
+				mounts = []*runtime.Mount{{Target: test.mount}}
+			}
+			prepared, err := service.prepareSandboxFiles("sandbox-test", defaults, net.ParseIP("10.88.0.2"), false, mounts, nil, "", sandboxHostsPolicy{runtime: test.runtime, rootReadonly: test.readonly})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.Rollback()
+			state := prepared.ManagedHosts()
+			if test.layout == "" {
+				if state != nil {
+					t.Fatalf("unexpected state: %+v", state)
+				}
+			} else if state == nil || state.Layout != test.layout || state.Runtime != test.runtime || state.RootReadonly != test.readonly {
+				t.Fatalf("state: %+v", state)
+			}
+			if (len(prepared.InitialFiles()) == 1) != test.initial {
+				t.Fatalf("initial files: %+v", prepared.InitialFiles())
+			}
+			if test.initial {
+				file := prepared.InitialFiles()[0]
+				if file.Path != "/etc/hosts" || file.Mode != 0644 || string(file.Content) != "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n10.88.0.2 configured-host\n" {
+					t.Fatalf("initial file: %+v", file)
+				}
+			}
+			platformHostMount := false
+			for _, mount := range prepared.Mounts() {
+				if mount.Target == "/etc/hosts" && mount.GetHostPath() != "" {
+					platformHostMount = true
+				}
+			}
+			if platformHostMount != test.legacy {
+				t.Fatalf("platform hosts mount: %v", platformHostMount)
+			}
+			if !test.legacy {
+				if _, err := os.Stat(filepath.Join(prepared.root, "hosts")); !os.IsNotExist(err) {
+					t.Fatalf("unexpected hosts backing file: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestPrepareRestoredManagedHostsDoesNotInitialize(t *testing.T) {
+	checkpoint := t.TempDir()
+	state := &svc.ManagedHostsState{
+		Version: svc.ManagedHostsVersion, Layout: svc.HostsLayoutPrivateRootfs, Runtime: "runsc",
+		Seed: &svc.RootfsSeed{File: svc.RootfsSeedName, SHA256: strings.Repeat("a", 64), AnnotationKey: svc.GVisorRootfsTarUpperAnnotation, AnnotationValue: svc.RootfsSeedName},
+	}
+	if err := svc.WriteManagedHostsState(checkpoint, state); err != nil {
+		t.Fatal(err)
+	}
+	service := managedHostsTestService(t)
+	// No IP is needed to restore hosts: empty/deleted state must not be seeded.
+	prepared, err := service.prepareSandboxFiles("restored", svc.SandboxDefaults{}, nil, false, nil, nil, "", sandboxHostsPolicy{runtime: "runsc", checkpointDir: checkpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.InitialFiles()) != 0 {
+		t.Fatal("restored hosts initialized")
+	}
+	for _, mount := range prepared.Mounts() {
+		if mount.Target == "/etc/hosts" {
+			t.Fatal("restored hosts remounted")
+		}
+	}
+	if !reflect.DeepEqual(state, prepared.ManagedHosts()) {
+		t.Fatalf("lost restore state: %+v", prepared.ManagedHosts())
+	}
+}
+
+func TestPrepareManagedHostsRestoreRejectsLayoutConflicts(t *testing.T) {
+	checkpoint := t.TempDir()
+	state := &svc.ManagedHostsState{Version: svc.ManagedHostsVersion, Layout: svc.HostsLayoutPrivateRootfs, Runtime: "runsc", Seed: &svc.RootfsSeed{File: svc.RootfsSeedName, SHA256: strings.Repeat("a", 64), AnnotationKey: svc.GVisorRootfsTarUpperAnnotation, AnnotationValue: svc.RootfsSeedName}}
+	if err := svc.WriteManagedHostsState(checkpoint, state); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		runtime  string
+		readonly bool
+		mount    string
+	}{
+		{"runsc", true, ""}, {"runsc", false, "/etc"}, {"runsc", false, "/etc/hosts"},
+	} {
+		service := managedHostsTestService(t)
+		var mounts []*runtime.Mount
+		if test.mount != "" {
+			mounts = []*runtime.Mount{{Target: test.mount}}
+		}
+		_, err := service.prepareSandboxFiles("restored", svc.SandboxDefaults{}, nil, false, mounts, nil, "", sandboxHostsPolicy{runtime: test.runtime, rootReadonly: test.readonly, checkpointDir: checkpoint})
+		if err == nil {
+			t.Fatalf("incompatible layout accepted: %+v", test)
+		}
+	}
+}
+
+func TestPrepareOldCheckpointKeepsLegacyMountAndOwnership(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		service := managedHostsTestService(t)
+		defaults := svc.SandboxDefaults{}
+		if owned {
+			defaults.MountDestinations = []string{"/etc/hosts"}
+		}
+		prepared, err := service.prepareSandboxFiles("old-restored", defaults, net.ParseIP("10.88.0.3"), false, nil, nil, "", sandboxHostsPolicy{runtime: "runsc", checkpointDir: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared.ManagedHosts() != nil || len(prepared.InitialFiles()) != 0 {
+			t.Fatal("old snapshot converted to new layout")
+		}
+		count := 0
+		for _, mount := range prepared.Mounts() {
+			if mount.Target == "/etc/hosts" {
+				count++
+				if !reflect.DeepEqual(mount.Options, []string{"bind", "ro"}) {
+					t.Fatal("old hosts became writable")
+				}
+			}
+		}
+		if (count == 1) == owned {
+			t.Fatalf("old ownership lost: owned=%v mounts=%+v", owned, prepared.Mounts())
+		}
+	}
+}
+
+func TestProviderWritableRootPreservesHostsPolicy(t *testing.T) {
+	provider := &svc.SpecUpdates{RequiresHostWritableRootfs: true}
+	for _, limit := range []uint64{0, 1024} {
+		policy := sandboxHostsPolicy{runtime: "runsc", rootReadonly: svc.EffectiveRootReadonly(true, limit, provider)}
+		state, err := selectManagedHostsState(policy, false)
+		if err != nil || state.Layout != svc.HostsLayoutPrivateRootfs || state.RootReadonly {
+			t.Fatalf("provider root state: %+v, %v", state, err)
+		}
+		state, err = selectManagedHostsState(policy, true)
+		if err != nil || state.Layout != svc.HostsLayoutExternal || state.RootReadonly {
+			t.Fatalf("provider external mount state: %+v, %v", state, err)
+		}
+	}
+}
+
+func TestOtherRuntimesIgnoreManagedHostsSidecars(t *testing.T) {
+	for _, runtimeName := range []string{"firecracker", "firecracker-pvm", "runc", "kata"} {
+		t.Run(runtimeName, func(t *testing.T) {
+			checkpoint := t.TempDir()
+			if err := os.WriteFile(filepath.Join(checkpoint, svc.ManagedHostsStateFile), []byte("not a managed hosts artifact"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			service := managedHostsTestService(t)
+			prepared, err := service.prepareSandboxFiles("unchanged", svc.SandboxDefaults{}, net.ParseIP("10.88.0.3"), false, nil, nil, "", sandboxHostsPolicy{runtime: runtimeName, checkpointDir: checkpoint})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.Rollback()
+			if prepared.ManagedHosts() != nil || len(prepared.InitialFiles()) != 0 {
+				t.Fatal("non-runsc runtime opted into managed hosts")
+			}
+			hosts := 0
+			for _, mount := range prepared.Mounts() {
+				if mount.Target == "/etc/hosts" {
+					hosts++
+					if !reflect.DeepEqual(mount.Options, []string{"bind", "ro"}) {
+						t.Fatal("existing hosts mount changed")
+					}
+				}
+			}
+			if hosts != 1 {
+				t.Fatalf("existing hosts mount lost: %d", hosts)
+			}
+		})
 	}
 }

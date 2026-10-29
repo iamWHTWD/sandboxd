@@ -69,6 +69,77 @@ func TestCreateUsesExactDebugLogPath(t *testing.T) {
 	t.Fatalf("runsc arguments %q do not contain %q", args, want)
 }
 
+func TestSeededCreatePreservesHostPathsAndChangesOnlyChildCWD(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	for _, directory := range []string{"bin", "bundle"} {
+		if err := os.Mkdir(directory, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	argsFile, cwdFile := filepath.Join(root, "args"), filepath.Join(root, "cwd")
+	t.Setenv("RUNSC_TEST_ARGS", argsFile)
+	t.Setenv("RUNSC_TEST_CWD", cwdFile)
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$RUNSC_TEST_ARGS\"\npwd > \"$RUNSC_TEST_CWD\"\nprintf 'user output\\n'\n"
+	if err := os.WriteFile("bin/runsc", []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClientWithOptions("./bin/runsc", "state", Options{FilestoreDir: "filestore", DebugLogPath: "logs/", ExtraArgs: []string{"--log=internal.log", "--profile-cpu=cpu.prof", "--profiling-metrics-log=-"}})
+	args := StartArgs{ID: "seeded", BundleDir: "bundle", UserStdout: "user.stdout", RootOverlay: "root:dir=private,size=10G", FilestoreAdoptDir: "adopt", SeededRootfs: true}
+	if err := c.Create(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for _, want := range []string{filepath.Join(root, "state"), filepath.Join(root, "bundle"), "--overlay2=root:dir=" + filepath.Join(root, "private") + ",size=10G", "--filestore-adopt-dir=" + filepath.Join(root, "adopt"), "-debug-log=" + filepath.Join(root, "logs") + "/", "--log=" + filepath.Join(root, "internal.log"), "--profile-cpu=" + filepath.Join(root, "cpu.prof"), "--profiling-metrics-log=-", "--allow-rootfs-tar-annotation=true", "--restore-spec-validation=enforce"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("missing normalized argument %q: %q", want, got)
+		}
+	}
+	cwd, err := os.ReadFile(cwdFile)
+	if err != nil || strings.TrimSpace(string(cwd)) != filepath.Join(root, "bundle") {
+		t.Fatalf("child cwd=%q err=%v", cwd, err)
+	}
+	if output, err := os.ReadFile("user.stdout"); err != nil || string(output) != "user output\n" {
+		t.Fatalf("stdio moved with child cwd: %q %v", output, err)
+	}
+	if c.RootDir != "state" || c.Binary != "./bin/runsc" || c.Options.ExtraArgs[0] != "--log=internal.log" || args.BundleDir != "bundle" {
+		t.Fatal("Create mutated shared client or caller arguments")
+	}
+	args.SeededRootfs = false
+	if err := c.Create(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err = os.ReadFile(cwdFile)
+	if err != nil || strings.TrimSpace(string(cwd)) != root {
+		t.Fatalf("unseeded child cwd changed: %q %v", cwd, err)
+	}
+	data, err = os.ReadFile(argsFile)
+	if err != nil || !strings.Contains(string(data), "--restore-spec-validation=enforce\n") || strings.Contains(string(data), "--allow-rootfs-tar-annotation=true") {
+		t.Fatalf("legacy candidate lost strict validation or enabled tar import: %q %v", data, err)
+	}
+}
+
+func TestSeededCreateRetainsPATHLookupAndRejectsManagedFlags(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "seeded-runsc"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	c := NewClientWithOptions("seeded-runsc", t.TempDir(), Options{FilestoreDir: t.TempDir()})
+	if err := c.Create(context.Background(), StartArgs{ID: "path", BundleDir: t.TempDir(), SeededRootfs: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--allow-rootfs-tar-annotation=true", "--allow-rootfs-tar-annotation=false", "--restore-spec-validation=ignore", "--restore-spec-validation=enforce"} {
+		if err := validateExtraArgs([]string{flag}); err == nil {
+			t.Fatalf("allowed managed flag %s", flag)
+		}
+	}
+}
+
 func TestDeleteDeadlineWithInheritedOutputPipe(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "runsc")

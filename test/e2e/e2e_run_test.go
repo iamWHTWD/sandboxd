@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,9 +27,9 @@ import (
 
 // Load only the helpers under test: sourcing the entrypoint would start
 // privileged workloads and install its destructive cleanup trap.
-func e2eFunctions(t *testing.T, names ...string) string {
+func shellFunctions(t *testing.T, filename string, names ...string) string {
 	t.Helper()
-	data, err := os.ReadFile("e2e-run.sh")
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func runE2EHelper(t *testing.T, script string) (string, error) {
 }
 
 func TestDirectDNSDependencies(t *testing.T) {
-	functions := e2eFunctions(t, "fail", "check_direct_dns_dependencies")
+	functions := shellFunctions(t, "e2e-run.sh", "fail", "check_direct_dns_dependencies")
 	for _, runtime := range []string{"all", "runsc", "runc"} {
 		for _, missing := range []string{"none", "dnsmasq", "timeout"} {
 			t.Run(runtime+"/"+missing, func(t *testing.T) {
@@ -112,7 +113,7 @@ command() { printf 'unexpected dependency check\n'; return 1; }
 }
 
 func TestCheckpointMemoryBudget(t *testing.T) {
-	function := e2eFunctions(t, "checkpoint_memory_mb")
+	function := shellFunctions(t, "e2e-run.sh", "checkpoint_memory_mb")
 	for _, tc := range []struct {
 		runtime, platform, want string
 	}{
@@ -132,7 +133,7 @@ func TestCheckpointMemoryBudget(t *testing.T) {
 }
 
 func TestStopSandboxd(t *testing.T) {
-	functions := e2eFunctions(t, "log", "fail", "stop_sandboxd")
+	functions := shellFunctions(t, "e2e-run.sh", "log", "fail", "stop_sandboxd")
 	for _, tc := range []struct {
 		name, message, tap                         string
 		stopAfter, waitStatus, bridge, links, term int
@@ -196,6 +197,272 @@ trap 'printf "pid=%%s; events=%%s\n" "${SANDBOXD_PID}" "${EVENTS}"' EXIT
 			}
 			if tc.term == 0 && !strings.Contains(output, "WAIT") {
 				t.Fatalf("stopped process was not reaped: %s", output)
+			}
+		})
+	}
+}
+
+func TestWritableHostsRestartHandshake(t *testing.T) {
+	function := shellFunctions(t, "e2e-run.sh", "run_writable_hosts_check")
+	for _, exitCode := range []int{0, 7} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
+			script := fmt.Sprintf(`
+SANDBOXD_HOME=%q
+SANDBOXD_ROOT=/test-owned-root
+SOCKET=/test-owned-socket
+HOSTS_CHILD_PID=""
+log() { :; }
+sleep() { command sleep 0.01; }
+crash_and_restart_sandboxd() { printf 'test-owned-restart\n'; }
+bash() {
+    # Use a real child shell, like the installed script: macOS bash 3.2 may
+    # terminate a background shell-function loop early after command sleep.
+    command bash -c '
+        set -eu
+        mkdir "${TEST_DIR}"
+        if [ %d != 0 ]; then exit %d; fi
+        touch "${TEST_DIR}/restart.request"
+        until [ -f "${TEST_DIR}/restart.done" ]; do sleep 0.01; done
+        printf "child-passed\n"
+    '
+}
+`, t.TempDir(), exitCode, exitCode) + function + "run_writable_hosts_check runsc /fixture case\n"
+			output, err := runE2EHelper(t, script)
+			if exitCode == 0 {
+				if err != nil || strings.Count(output, "test-owned-restart") != 1 || !strings.Contains(output, "child-passed") {
+					t.Fatalf("restart handshake: err=%v output=%s", err, output)
+				}
+			} else if err == nil || strings.Contains(output, "test-owned-restart") {
+				t.Fatalf("failed child was accepted or restarted: err=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
+func TestHostsOnlyDoesNotRequireDirectDNSFixture(t *testing.T) {
+	functions := shellFunctions(t, "e2e-run.sh", "fail", "check_direct_dns_dependencies")
+	script := `
+E2E_RUNTIME=runsc
+DISABLE_CGROUP=0
+HOSTS_ONLY=1
+command() { printf 'unexpected dependency check\n'; return 1; }
+` + functions + "check_direct_dns_dependencies\nprintf 'passed\n'\n"
+	output, err := runE2EHelper(t, script)
+	if err != nil || output != "passed\n" {
+		t.Fatalf("hosts-only used direct DNS fixture: err=%v output=%s", err, output)
+	}
+}
+
+// The concurrency fixture must not mistake filestore ENOSPC for a runtime
+// regression; ordinary runtime profiles retain the existing budget.
+func TestHostsConcurrencyFilestoreBudget(t *testing.T) {
+	function := shellFunctions(t, "e2e-run.sh", "e2e_filestore_size")
+	for _, tc := range []struct {
+		name, runtime, checkpointMode string
+		count                         int
+	}{
+		{"runsc_default", "runsc", "", 0},
+		{"firecracker_default", "firecracker", "", 0},
+		{"reflink_default", "runsc", "reflink", 0},
+		{"reflink_concurrent", "runsc", "reflink", 8},
+		{"runsc_concurrent", "runsc", "", 16},
+		{"runsc_maximum", "runsc", "", 64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := fmt.Sprintf("HOSTS_CONCURRENCY=%d\nE2E_RUNTIME=%q\nRUNSC_CHECKPOINT_MODE=%q\n", tc.count, tc.runtime, tc.checkpointMode)
+			output, err := runE2EHelper(t, script+function+"e2e_filestore_size\n")
+			if err != nil {
+				t.Fatalf("filestore size: %v: %s", err, output)
+			}
+			size := strings.TrimSpace(output)
+			if tc.checkpointMode == "reflink" {
+				if size != "" {
+					t.Fatalf("reflink must use caller filesystem, got %q", size)
+				}
+				return
+			}
+			if tc.count == 0 {
+				if size != "1G" {
+					t.Fatalf("ordinary profile changed: got %q, want 1G", size)
+				}
+				return
+			}
+			if !strings.HasSuffix(size, "M") {
+				t.Fatalf("concurrency size must use MiB, got %q", size)
+			}
+			capacity, err := strconv.Atoi(strings.TrimSuffix(size, "M"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			minimum := tc.count*64 + 256
+			if capacity < minimum {
+				t.Fatalf("capacity %d MiB cannot hold %d instances; need at least %d MiB", capacity, tc.count, minimum)
+			}
+		})
+	}
+}
+
+// A failed List is not evidence that rollback removed the sandbox. Exercise
+// both empty and partial failed responses before allowing the clean marker.
+func TestWritableHostsInventoryAbsence(t *testing.T) {
+	common, err := os.ReadFile("writable-hosts-common.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                  string
+		present, listExitCode int
+		wantExitCode          int
+	}{
+		{"absent", 0, 0, 0},
+		{"present", 1, 0, 1},
+		{"unavailable", 0, 23, 23},
+		{"partial_response", 1, 23, 23},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := string(common) + fmt.Sprintf(`
+sbox_cmd() {
+    [ "$1" = list ]
+    printf 'ID\nother-sandbox\n'
+    if [ %d = 1 ]; then printf 'test-sandbox\n'; fi
+    return %d
+}
+fail() { printf '%%s\n' "$*" >&2; exit 1; }
+assert_hosts_inventory_absent %q test-sandbox
+printf 'clean\n'
+`, tc.present, tc.listExitCode, t.TempDir()+"/inventory")
+			output, err := runE2EHelper(t, script)
+			if tc.wantExitCode == 0 {
+				if err != nil || output != "clean\n" {
+					t.Fatalf("absent sandbox: err=%v output=%s", err, output)
+				}
+				return
+			}
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok || exitErr.ExitCode() != tc.wantExitCode || strings.Contains(output, "clean") {
+				t.Fatalf("false cleanup success: err=%v want exit=%d output=%s", err, tc.wantExitCode, output)
+			}
+		})
+	}
+}
+
+func TestHostsOnlySourceRunner(t *testing.T) {
+	function := shellFunctions(t, "run.sh", "configure_hosts_suite")
+	for _, tc := range []struct {
+		name, runtime, regression string
+		only, count, soak         int
+		wantSecond                int
+		wantError                 bool
+	}{
+		{"default", "all", "", 0, 0, 0, 1, false},
+		{"ordinary_firecracker", "firecracker", "", 0, 0, 0, 1, false},
+		{"ordinary_network_soak", "all", "", 0, 0, 1, 1, false},
+		{"hosts_only", "runsc", "", 1, 0, 0, 0, false},
+		{"regression", "runsc", "relative-bind", 0, 0, 0, 0, false},
+		{"concurrency", "runsc", "", 0, 2, 0, 0, false},
+		{"invalid_hosts_only", "runsc", "", 2, 0, 0, 1, true},
+		{"hosts_only_network_soak", "runsc", "", 1, 0, 1, 1, true},
+		{"hosts_only_firecracker", "firecracker", "", 1, 0, 0, 1, true},
+		{"regression_firecracker", "firecracker", "nydus", 0, 0, 0, 1, true},
+		{"concurrency_firecracker", "firecracker", "", 0, 8, 0, 1, true},
+		{"hosts_only_all", "all", "", 1, 0, 0, 1, true},
+		{"hosts_only_and_regression", "runsc", "relative-bind", 1, 0, 0, 1, true},
+		{"hosts_only_and_concurrency", "runsc", "", 1, 4, 0, 1, true},
+		{"regression_and_concurrency", "runsc", "relative-bind", 0, 4, 0, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := fmt.Sprintf(`
+E2E_RUNTIME=%q
+E2E_HOSTS_ONLY=%d
+E2E_HOSTS_REGRESSION=%q
+E2E_HOSTS_CONCURRENCY=%d
+E2E_HOSTS_ROOTFS_KIND=erofs
+E2E_NETWORK_SOAK=%d
+E2E_RUN_CGROUP_DISABLED=1
+fail() { printf '%%s\n' "$*" >&2; exit 1; }
+`, tc.runtime, tc.only, tc.regression, tc.count, tc.soak) + function + `
+configure_hosts_suite
+printf 'second_pass=%s\n' "${E2E_RUN_CGROUP_DISABLED}"
+`
+			output, err := runE2EHelper(t, script)
+			if tc.wantError {
+				if err == nil || strings.Contains(output, "second_pass=") {
+					t.Fatalf("invalid mode accepted: err=%v output=%s", err, output)
+				}
+			} else if err != nil || output != fmt.Sprintf("second_pass=%d\n", tc.wantSecond) {
+				t.Fatalf("second suite selection: err=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
+func TestHostsRuntimeCaseRejectsOtherRuntimesBeforeBuild(t *testing.T) {
+	for _, runtime := range []string{"firecracker", "firecracker-virtiofs", "firecracker-pvm", "firecracker-pvm-incremental", "kata", "runc"} {
+		for _, mode := range []string{"E2E_HOSTS_ONLY=1", "E2E_HOSTS_REGRESSION=relative-bind", "E2E_HOSTS_CONCURRENCY=8"} {
+			t.Run(runtime+"/"+mode, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "bash", "runtime-case.sh")
+				cmd.Env = append(os.Environ(), "E2E_CASE="+runtime, "E2E_HOSTS_ONLY=0", "E2E_HOSTS_REGRESSION=", "E2E_HOSTS_CONCURRENCY=0", mode)
+				output, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "writable hosts modes require E2E_RUNTIME=runsc") {
+					t.Fatalf("non-runsc hosts mode reached prerequisites/build: err=%v output=%s", err, output)
+				}
+			})
+		}
+	}
+}
+
+func TestHostsScriptsRejectOtherRuntimes(t *testing.T) {
+	for _, script := range []string{"writable-hosts.sh", "writable-hosts-concurrency.sh"} {
+		for _, runtime := range []string{"firecracker", "firecracker-pvm", "kata", "runc"} {
+			t.Run(script+"/"+runtime, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "bash", script)
+				cmd.Env = append(os.Environ(), "RUNTIME="+runtime, "TEST_DIR=/unused-hosts-test", "ROOTFS=/unused-root", "SANDBOXD_ROOT=/unused-daemon", "FILESTORE_ROOT=/unused-storage")
+				output, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "unsupported runtime: "+runtime) {
+					t.Fatalf("non-runsc hosts script accepted or touched prerequisites: err=%v output=%s", err, output)
+				}
+			})
+		}
+	}
+}
+
+// The concurrent writer phase must propagate a failed guest command, not only
+// record it in a timing file while allowing the parent phase to pass.
+func TestConcurrentHostsWriterPropagatesFailure(t *testing.T) {
+	for _, phase := range []string{"write_sources", "write_own", "write_clones"} {
+		t.Run(phase, func(t *testing.T) {
+			root := t.TempDir()
+			phaseDir := root + "/phases/" + phase
+			if err := os.MkdirAll(phaseDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(phaseDir+"/go", nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			bin := root + "/bin"
+			if err := os.Mkdir(bin, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(bin+"/sbox", []byte("#!/bin/sh\nexit 23\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", "writable-hosts-concurrency.sh", "--worker", phase, "1")
+			cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "RUNTIME=runsc", "TEST_DIR="+root,
+				"ROOTFS=/unused-root", "SANDBOXD_ROOT=/unused-daemon", "FILESTORE_ROOT=/unused-storage")
+			output, err := cmd.CombinedOutput()
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok || exitErr.ExitCode() != 23 {
+				t.Fatalf("writer failure lost: err=%v output=%s", err, output)
+			}
+			events, err := os.ReadFile(phaseDir + "/1.events.tsv")
+			if err != nil || !strings.HasSuffix(string(events), "\t23\n") {
+				t.Fatalf("failed write event missing: err=%v events=%s", err, events)
 			}
 		})
 	}

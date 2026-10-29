@@ -378,7 +378,7 @@ func TestRestoreOverlappingInputIsRejectedBeforeCleanup(t *testing.T) {
 				var err error
 				if fullRPC {
 					_, err = service.Start(context.Background(), &runtime.StartRequest{
-						SandboxID: id, Runtime: "runsc", Rootfs: &runtime.RootfsConfig{},
+						SandboxID: id, StartKey: "overlapping-restore", Runtime: "runsc", Rootfs: &runtime.RootfsConfig{},
 						CheckpointInfo: &runtime.CheckpointInfo{CheckpointDir: checkpoint},
 					})
 				} else {
@@ -386,6 +386,17 @@ func TestRestoreOverlappingInputIsRejectedBeforeCleanup(t *testing.T) {
 				}
 				require.ErrorContains(t, err, "overlap")
 				require.Empty(t, handler.restores)
+				if fullRPC {
+					inventory, listErr := service.List(context.Background(), &runtime.ListSandboxesRequest{})
+					require.NoError(t, listErr)
+					require.Empty(t, inventory.Sandboxes)
+					_, deleteErr := service.Delete(fenceContext(), &runtime.DeleteRequest{StartKey: "overlapping-restore"})
+					require.NoError(t, deleteErr)
+					reserved, reserveErr := service.sandboxManager.ReserveID(id)
+					require.NoError(t, reserveErr)
+					require.Equal(t, id, reserved)
+					service.sandboxManager.ReleaseID(id)
+				}
 				data, readErr := os.ReadFile(filename)
 				require.NoError(t, readErr)
 				require.Equal(t, original, data)

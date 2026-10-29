@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -353,4 +354,42 @@ func TestStartSandboxRuntimeRejectsUnsupportedRestore(t *testing.T) {
 		CheckpointDir: "/checkpoints/one",
 	})
 	assert.Equal(t, codes.Unimplemented, status.Code(err))
+}
+
+func TestRestoreOverlappingInputIsRejectedBeforeCleanup(t *testing.T) {
+	for _, fullRPC := range []bool{false, true} {
+		for _, relation := range []string{"same", "inside", "parent"} {
+			t.Run(fmt.Sprintf("rpc=%v/%s", fullRPC, relation), func(t *testing.T) {
+				handler := newCheckpointTestHandler()
+				service := newTestService(t, map[string]svc.Handler{"runsc": handler})
+				id := "sbox-protected-input"
+				bundle := filepath.Join(service.config.RootDir, "containers", id)
+				checkpoint := bundle
+				if relation == "inside" {
+					checkpoint = filepath.Join(bundle, "checkpoint")
+				}
+				if relation == "parent" {
+					checkpoint = filepath.Dir(bundle)
+				}
+				require.NoError(t, os.MkdirAll(checkpoint, 0700))
+				filename := filepath.Join(checkpoint, "rootfs-seed.tar")
+				original := []byte("caller-owned checkpoint input")
+				require.NoError(t, os.WriteFile(filename, original, 0600))
+				var err error
+				if fullRPC {
+					_, err = service.Start(context.Background(), &runtime.StartRequest{
+						SandboxID: id, Runtime: "runsc", Rootfs: &runtime.RootfsConfig{},
+						CheckpointInfo: &runtime.CheckpointInfo{CheckpointDir: checkpoint},
+					})
+				} else {
+					err = service.startSandboxRuntime(context.Background(), "runsc", svc.StartConfig{ID: id, CheckpointDir: checkpoint})
+				}
+				require.ErrorContains(t, err, "overlap")
+				require.Empty(t, handler.restores)
+				data, readErr := os.ReadFile(filename)
+				require.NoError(t, readErr)
+				require.Equal(t, original, data)
+			})
+		}
+	}
 }

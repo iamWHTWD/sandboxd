@@ -65,6 +65,18 @@ Sharing applies to writable-file extents, not the independently saved applicatio
 
 Save and restore must use matching runtime builds. Drain sandboxes before replacing the runtime bundle; do not assume old saved state remains compatible across a gVisor upgrade. Install the complete checksum-pinned gVisor archive with its matching helpers, rather than replacing runsc alone.
 
+## Managed hosts state
+
+New runsc and standard Firecracker sandboxes with a writable root initialize `/etc/hosts` as an ordinary file in their private root filesystem before the first workload process starts. No writable-hosts API switch is required. Writes, replacement with `sed -i` or rename, truncation, and deletion follow the root filesystem's checkpoint state. Restore retains the saved contents and existence state, including an empty or deleted file, and does not regenerate entries for the newly allocated IP address.
+
+An explicit caller or base-spec mount that owns `/etc/hosts` or a parent directory retains priority. Its data continues to follow the existing mount contract; external host data is not included in the snapshot. A finally read-only root retains the platform's read-only hosts mount. An explicit positive writable-layer limit retains the existing precedence over the requested root read-only setting. Runc, Kata, Firecracker PVM, `/etc/hostname`, and `/etc/resolv.conf` retain their existing behavior. File permissions still apply; initializing mode `0644` does not grant arbitrary sandbox users write access.
+
+The checkpoint directory carries `managed-hosts.json`, which records the schema, runtime, effective root mode, and hosts layout. A private-rootfs runsc checkpoint also contains the original immutable `rootfs-seed.tar` and its SHA-256. This seed supplies creation-time dependencies, not the current contents of hosts. Restore copies the seed into the new bundle, keeps the same relative annotation, and loads the saved native state without replaying initialization. Keep both files with the complete checkpoint, outside the separately managed `filestores/` directory. Deleting the source sandbox must not delete these caller-owned copies; each restored sandbox keeps its own initialization dependencies for later checkpoints.
+
+The Firecracker v2 manifest declares `managed-hosts.json` and requires its digest. A missing, unrecognized, mismatched, or undeclared sidecar fails restore, including on warm restores. No tar is added to a Firecracker checkpoint, and restore never resends `Configure.Files`. The guest overlay preserves the actual hosts file. Small hosts metadata is synchronized when published; this does not make the VM, memory, or writable-disk checkpoint durable. The existing `sync_output` option still owns the complete checkpoint synchronization barrier.
+
+Snapshots from before this schema retain the old preparation path and explicit mount priority; they are not converted to writable hosts. For runsc, an absent sidecar is only a legacy candidate: strict native spec validation still rejects a checkpoint whose saved seed annotation has been removed. Invalid sidecars, missing seeds, digest failures, and requested changes to saved runtime/root mode/mount ownership fail explicitly. New-layout snapshots are not promised to work with old sandboxd versions. Drain or retain a compatible stack when upgrading or rolling back; matching hosts layouts does not relax runtime-build compatibility.
+
 ## Checkpoint output synchronization
 
 `plugin.runtime.checkpoint_sync.sync_output` defaults to `false`, preserving the existing page-cache completion contract. Set it to `true` when successful checkpoint publication must include the backing filesystem's synchronization guarantee:

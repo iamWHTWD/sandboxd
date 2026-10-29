@@ -63,6 +63,7 @@ STRESS_CONCURRENCY="${E2E_STRESS_CONCURRENCY:-8}"
 STRESS_ROOTFS="${E2E_STRESS_ROOTFS:-}"
 STRESS_CHECKPOINT="${E2E_STRESS_CHECKPOINT:-0}"
 STRESS_ONLY="${E2E_STRESS_ONLY:-0}"
+HOSTS_ONLY="${E2E_HOSTS_ONLY:-0}"
 DISABLE_CGROUP="${E2E_DISABLE_CGROUP:-0}"
 CPU_LIMIT_MODE="${E2E_CPU_LIMIT_MODE:-quota}"
 E2E_RUNTIME="${E2E_RUNTIME:-all}"
@@ -71,6 +72,7 @@ RUNSC_PLATFORM="${E2E_RUNSC_PLATFORM:-systrap}"
 export RUNSC_IGNORE_CGROUPS="${DISABLE_CGROUP}"
 
 SANDBOXD_PID=""
+HOSTS_CHILD_PID=""
 HTTPD_PID=""
 DIRECT_DNS_PID=""
 DIRECT_DNS_ALIAS_ADDED=0
@@ -160,6 +162,10 @@ cleanup() {
     for stress_id in "${STRESS_IDS[@]}"; do
         /usr/local/bin/sbox --address "${SOCKET}" --timeout 20s delete "${stress_id}" >/dev/null 2>&1
     done
+    if [ -n "${HOSTS_CHILD_PID}" ]; then
+        kill "${HOSTS_CHILD_PID}" >/dev/null 2>&1
+        wait "${HOSTS_CHILD_PID}" >/dev/null 2>&1
+    fi
     if [ -n "${HTTPD_PID}" ]; then
         kill "${HTTPD_PID}" >/dev/null 2>&1
         wait "${HTTPD_PID}" >/dev/null 2>&1
@@ -207,7 +213,7 @@ cleanup() {
 trap cleanup EXIT
 
 check_direct_dns_dependencies() {
-    if [ "${1:-e2e}" != "e2e" ] || [ "${DISABLE_CGROUP}" = "1" ]; then
+    if [ "${1:-e2e}" != "e2e" ] || [ "${DISABLE_CGROUP}" = "1" ] || [ "${HOSTS_ONLY:-0}" = "1" ]; then
         return
     fi
     case "${E2E_RUNTIME}" in
@@ -229,6 +235,7 @@ preflight() {
         fail "E2E_STRESS_CHECKPOINT must be 0 or 1"
     [[ "${STRESS_ONLY}" =~ ^[01]$ ]] ||
         fail "E2E_STRESS_ONLY must be 0 or 1"
+    [[ "${HOSTS_ONLY}" =~ ^[01]$ ]] || fail "E2E_HOSTS_ONLY must be 0 or 1"
     [[ "${DISABLE_CGROUP}" =~ ^[01]$ ]] || fail "E2E_DISABLE_CGROUP must be 0 or 1"
     [[ "${NETWORK_SOAK}" =~ ^[01]$ ]] || fail "E2E_NETWORK_SOAK must be 0 or 1"
     [[ "${FIRECRACKER_VIRTIOFS}" =~ ^[01]$ ]] ||
@@ -618,10 +625,13 @@ EOF
 nameserver 8.8.8.8
 EOF
 
+    # Readonly roots need mountpoints present in the immutable lower.
+    : > "${ROOTFS}/etc/hostname"
+    : > "${ROOTFS}/etc/resolv.conf"
     echo "host-mount-ok" > "${HOST_MOUNT}/input.txt"
     echo "sandboxd-network-ok" > "${WWW_ROOT}/health.txt"
     echo "erofs-mount-ok" > "${EROFS_MOUNT_ROOT}/input.txt"
-    mkfs.erofs "${EROFS_ROOTFS}" "${ROOTFS}" >/dev/null
+    mkfs.erofs -E noinline_data "${EROFS_ROOTFS}" "${ROOTFS}" >/dev/null
     mkfs.erofs "${EROFS_MOUNT_IMAGE}" "${EROFS_MOUNT_ROOT}" >/dev/null
 
     if [ "${NETWORK_SOAK}" = "1" ]; then
@@ -914,6 +924,48 @@ run_host_mount_rw_check() {
     RUNTIME="${runtime}" ROOTFS="${rootfs}" SOCKET="${SOCKET}" \
         CASE_ID="${suffix}-rw" TEST_DIR="${SANDBOXD_HOME}/${suffix}-rw" \
         KEEP_RUNNING=0 bash /usr/local/bin/sandboxd-host-mount-rw
+}
+
+run_writable_hosts_check() {
+    local runtime="$1" rootfs="$2" suffix="$3"
+    case "${runtime}" in runsc|firecracker) ;; *) return ;; esac
+    log "testing ${suffix} managed hosts through server checkpoint/restore RPC"
+    local test_dir="${SANDBOXD_HOME}/${suffix}-hosts" child_pid status=0
+    RUNTIME="${runtime}" ROOTFS="${rootfs}" SOCKET="${SOCKET}" \
+        SANDBOXD_ROOT="${SANDBOXD_ROOT}" CASE_ID="${suffix}-hosts" \
+        TEST_DIR="${test_dir}" RESTART_HANDSHAKE=1 \
+        bash /usr/local/bin/sandboxd-writable-hosts &
+    child_pid=$!
+    HOSTS_CHILD_PID="${child_pid}"
+    while kill -0 "${child_pid}" 2>/dev/null; do
+        if [ -f "${test_dir}/restart.request" ] && [ ! -f "${test_dir}/restart.done" ]; then
+            # Resource leases checkpoint periodically. Restart only this runner's
+            # daemon, after its restored target is recorded durably.
+            sleep 6
+            crash_and_restart_sandboxd
+            touch "${test_dir}/restart.done"
+        fi
+        sleep 0.1
+    done
+    wait "${child_pid}" || status=$?
+    HOSTS_CHILD_PID=""
+    return "${status}"
+}
+
+run_writable_hosts_suite() {
+    case "${E2E_RUNTIME}" in
+        all|runsc)
+            run_writable_hosts_check runsc "${EROFS_ROOTFS}" "runsc-${RUNSC_PLATFORM}-erofs"
+            run_writable_hosts_check runsc "${ROOTFS}" "runsc-${RUNSC_PLATFORM}-directory"
+            ;;
+        firecracker)
+            run_writable_hosts_check firecracker "${EROFS_ROOTFS}" firecracker-erofs
+            if [ "${FIRECRACKER_VIRTIOFS}" = 1 ]; then
+                run_writable_hosts_check firecracker "${ROOTFS}" firecracker-directory
+            fi
+            ;;
+        *) fail "writable hosts are only qualified for runsc and firecracker" ;;
+    esac
 }
 
 checkpoint_memory_mb() {
@@ -2369,6 +2421,10 @@ run_firecracker_checks() {
     run_dnat_check "${fc_runtime}" "Firecracker" "${rootfs}" 256
 
     run_checkpoint_restore_check "${fc_runtime}" "${rootfs}"
+    run_writable_hosts_check "${fc_runtime}" "${EROFS_ROOTFS}" firecracker-erofs
+    if [ "${FIRECRACKER_VIRTIOFS}" = "1" ]; then
+        run_writable_hosts_check "${fc_runtime}" "${ROOTFS}" firecracker-directory
+    fi
     if [ "${FIRECRACKER_VIRTIOFS}" = "1" ]; then
         run_host_mount_rw_check "${fc_runtime}" "${EROFS_ROOTFS}" firecracker-erofs
         run_host_mount_rw_check "${fc_runtime}" "${ROOTFS}" firecracker-directory
@@ -2575,6 +2631,7 @@ run_runsc_checks() {
     run_dnat_check runsc "runsc" "${ROOTFS}" "${memory_mb}"
     run_checkpoint_restore_check runsc "${ROOTFS}"
     run_host_mount_rw_check runsc "${ROOTFS}" "runsc-${RUNSC_PLATFORM}"
+    run_writable_hosts_suite
     run_storage_quota_check
 
     run_partial_oom_check
@@ -2705,6 +2762,11 @@ run_e2e() {
     write_config
     prepare_rootfs
     start_sandboxd
+    if [ "${HOSTS_ONLY}" = 1 ]; then
+        run_writable_hosts_suite
+        log "writable hosts RPC e2e passed"
+        return
+    fi
     if [ "${DISABLE_CGROUP}" = "0" ] && {
         [ "${E2E_RUNTIME}" = "all" ] || [ "${E2E_RUNTIME}" = "runsc" ];
     }; then

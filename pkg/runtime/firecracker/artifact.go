@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	runtimecore "github.com/inclusionAI/sandboxd/pkg/runtime"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -76,6 +78,7 @@ type firecrackerCheckpointCompat struct {
 // directory. It is written last so that its presence marks a self-consistent
 // artifact: a restore never sees a half-written checkpoint.
 type firecrackerCheckpointManifest struct {
+	ManagedHosts string                       `json:"managed_hosts,omitempty"`
 	Version      int                          `json:"version"`
 	SnapshotType string                       `json:"snapshot_type"`
 	MemorySize   int64                        `json:"memory_size"`
@@ -101,7 +104,8 @@ const (
 // firecrackerCheckpointArtifact is the opened view of a caller-owned
 // checkpoint directory, regardless of layout version.
 type firecrackerCheckpointArtifact struct {
-	Layout firecrackerCheckpointLayout
+	ManagedHosts *runtimecore.ManagedHostsState
+	Layout       firecrackerCheckpointLayout
 	// Manifest is set for v2 directories only.
 	Manifest *firecrackerCheckpointManifest
 	// Files holds the in-directory component paths for v2 directories only.
@@ -171,6 +175,7 @@ func checkFirecrackerCheckpointDirVacant(dir string) error {
 	for _, marker := range []string{
 		firecrackerCheckpointManifestName,
 		checkpointImageName,
+		runtimecore.ManagedHostsStateFile,
 	} {
 		_, err := os.Lstat(filepath.Join(dir, marker))
 		if errors.Is(err, os.ErrNotExist) {
@@ -202,6 +207,10 @@ func finalizeFirecrackerCheckpointV2(
 	if manifest.VirtioFS != (files.VirtioFSState != "") {
 		return errors.New("Firecracker checkpoint virtio-fs manifest does not match its components")
 	}
+	if (manifest.ManagedHosts != "") != (files.ManagedHosts != "") ||
+		(files.ManagedHosts != "" && (manifest.ManagedHosts != runtimecore.ManagedHostsStateFile || files.ManagedHosts != filepath.Join(filepath.Dir(files.State), runtimecore.ManagedHostsStateFile))) {
+		return errors.New("Firecracker checkpoint managed hosts manifest does not match its components")
+	}
 	if manifest.MemorySize <= 0 {
 		// Full snapshots discover the guest memory size from the file
 		// Firecracker just wrote.
@@ -226,6 +235,9 @@ func finalizeFirecrackerCheckpointV2(
 			return err
 		}
 		manifest.Digests[component.name] = digest
+	}
+	if _, err := readFirecrackerCheckpointHosts(filepath.Dir(files.State), manifest); err != nil {
+		return err
 	}
 
 	digested := time.Now()
@@ -272,6 +284,9 @@ func openFirecrackerCheckpoint(dir string) (*firecrackerCheckpointArtifact, erro
 		if !imageInfo.Mode().IsRegular() || imageInfo.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("Firecracker checkpoint archive is not a regular file")
 		}
+		if _, err := readFirecrackerCheckpointHosts(dir, nil); err != nil {
+			return nil, err
+		}
 		return &firecrackerCheckpointArtifact{
 			Layout: firecrackerCheckpointLayoutV1Archive,
 		}, nil
@@ -283,14 +298,22 @@ func openFirecrackerCheckpoint(dir string) (*firecrackerCheckpointArtifact, erro
 	if err != nil {
 		return nil, err
 	}
+	hosts, err := readFirecrackerCheckpointHosts(dir, manifest)
+	if err != nil {
+		return nil, err
+	}
 	artifact := &firecrackerCheckpointArtifact{
-		Layout:   firecrackerCheckpointLayoutV2Directory,
-		Manifest: manifest,
+		ManagedHosts: hosts,
+		Layout:       firecrackerCheckpointLayoutV2Directory,
+		Manifest:     manifest,
 		Files: firecrackerCheckpointFiles{
 			State:   filepath.Join(dir, firecrackerCheckpointStateName),
 			Memory:  filepath.Join(dir, firecrackerCheckpointMemoryName),
 			Overlay: filepath.Join(dir, firecrackerCheckpointOverlayName),
 		},
+	}
+	if hosts != nil {
+		artifact.Files.ManagedHosts = filepath.Join(dir, runtimecore.ManagedHostsStateFile)
 	}
 	if manifest.VirtioFS {
 		artifact.Files.VirtioFSState = filepath.Join(
@@ -501,6 +524,11 @@ func firecrackerCheckpointComponents(
 		components = append(components, struct{ name, path string }{
 			name: firecrackerCheckpointVirtioFSName,
 			path: files.VirtioFSState,
+		})
+	}
+	if files.ManagedHosts != "" {
+		components = append(components, struct{ name, path string }{
+			name: runtimecore.ManagedHostsStateFile, path: files.ManagedHosts,
 		})
 	}
 	return components

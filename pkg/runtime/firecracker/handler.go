@@ -72,14 +72,15 @@ var (
 )
 
 type firecrackerPersistedState struct {
-	ID          string                    `json:"id"`
-	PID         int                       `json:"pid"`
-	BundlePath  string                    `json:"bundle_path"`
-	APIPath     string                    `json:"api_path"`
-	VsockPath   string                    `json:"vsock_path"`
-	OverlayPath string                    `json:"overlay_path"`
-	VirtioFS    *firecrackerVirtioFSState `json:"virtio_fs,omitempty"`
-	CreatedAt   string                    `json:"created_at"`
+	ManagedHosts *runtimecore.ManagedHostsState `json:"managed_hosts,omitempty"`
+	ID           string                         `json:"id"`
+	PID          int                            `json:"pid"`
+	BundlePath   string                         `json:"bundle_path"`
+	APIPath      string                         `json:"api_path"`
+	VsockPath    string                         `json:"vsock_path"`
+	OverlayPath  string                         `json:"overlay_path"`
+	VirtioFS     *firecrackerVirtioFSState      `json:"virtio_fs,omitempty"`
+	CreatedAt    string                         `json:"created_at"`
 	// MemoryMiB is the guest memory size in MiB, recorded so incremental
 	// checkpoints can preallocate or clone a full-size base memory file.
 	MemoryMiB uint32 `json:"memory_mib,omitempty"`
@@ -645,6 +646,9 @@ func (handler *Handler) Start(
 	ctx context.Context,
 	startConfig runtimecore.StartConfig,
 ) (retErr error) {
+	if err := handler.validateManagedHostsRuntime(startConfig.ManagedHosts); err != nil {
+		return err
+	}
 	if startConfig.DisableCgroup || startConfig.CgroupPath == "" {
 		return errors.New("Firecracker requires a managed cgroup")
 	}
@@ -825,14 +829,15 @@ func (handler *Handler) Start(
 	}
 	instance := &firecrackerInstance{
 		state: firecrackerPersistedState{
-			ID:          startConfig.ID,
-			PID:         command.Process.Pid,
-			BundlePath:  bundlePath,
-			APIPath:     apiPath,
-			VsockPath:   vsockPath,
-			OverlayPath: overlayPath,
-			VirtioFS:    virtioFSState,
-			CreatedAt:   time.Now().Format(time.RFC3339Nano),
+			ManagedHosts: cloneFirecrackerManagedHosts(startConfig.ManagedHosts),
+			ID:           startConfig.ID,
+			PID:          command.Process.Pid,
+			BundlePath:   bundlePath,
+			APIPath:      apiPath,
+			VsockPath:    vsockPath,
+			OverlayPath:  overlayPath,
+			VirtioFS:     virtioFSState,
+			CreatedAt:    time.Now().Format(time.RFC3339Nano),
 		},
 		done:    make(chan struct{}),
 		vmmExit: make(chan error, 1),
@@ -1462,6 +1467,9 @@ func (handler *Handler) validatePersistedState(
 	bundlePath string,
 	state firecrackerPersistedState,
 ) error {
+	if err := handler.validateManagedHostsRuntime(state.ManagedHosts); err != nil {
+		return err
+	}
 	if state.ID != sandboxID {
 		return fmt.Errorf(
 			"Firecracker state ID %q does not match sandbox %q",

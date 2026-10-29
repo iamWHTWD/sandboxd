@@ -111,6 +111,9 @@ func prepareFirecrackerStorage(
 	); err != nil {
 		return nil, err
 	}
+	if err := validateFirecrackerHostsLayout(spec, startConfig, mounts, extraConfig); err != nil {
+		return nil, err
+	}
 	plan := &firecrackerStoragePlan{
 		configure: firecrackerproto.ConfigureRequest{
 			Hostname:     spec.Hostname,
@@ -175,6 +178,12 @@ func prepareFirecrackerStorage(
 	nextDrive++
 
 	injectedBytes := 0
+	for _, file := range startConfig.InitialFiles {
+		injectedBytes += len(file.Content)
+		plan.configure.Files = append(plan.configure.Files, firecrackerproto.FileSpec{
+			Target: file.Path, Content: append([]byte(nil), file.Content...), Mode: file.Mode, Readonly: false,
+		})
+	}
 	for _, mount := range mounts {
 		target := filepath.Clean(mount.Destination)
 		if skipFirecrackerSystemMount(mount.Type, target) {

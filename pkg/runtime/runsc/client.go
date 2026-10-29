@@ -76,6 +76,8 @@ type StartArgs struct {
 	UserStdout  string
 	UserStderr  string
 	RootOverlay string
+	// SeededRootfs makes the bundle-relative managed seed annotation resolvable.
+	SeededRootfs bool
 	// FilestoreAdoptDir is per-restore state, never a persistent global option.
 	FilestoreAdoptDir string
 	Network           NetworkConfig
@@ -112,6 +114,16 @@ func (c *Client) Create(ctx context.Context, args StartArgs) error {
 	if c.Options.FilestoreDir == "" {
 		return fmt.Errorf("filestore directory is empty for %s", args.ID)
 	}
+	if err := validateExtraArgs(c.Options.ExtraArgs); err != nil {
+		return err
+	}
+	if args.SeededRootfs {
+		var err error
+		c, args, err = c.forSeededCreate(args)
+		if err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(c.RootDir, 0711); err != nil {
 		return fmt.Errorf("create runsc root %s: %w", c.RootDir, err)
 	}
@@ -138,6 +150,12 @@ func (c *Client) Create(ctx context.Context, args StartArgs) error {
 		"-network=sandbox",
 	)
 	cmdArgs = append(cmdArgs, c.Options.ExtraArgs...)
+	// Missing new metadata is only a legacy candidate. Strict validation must
+	// still reject its saved upper-tar annotation during Restore.
+	cmdArgs = append(cmdArgs, "--restore-spec-validation=enforce")
+	if args.SeededRootfs {
+		cmdArgs = append(cmdArgs, "--allow-rootfs-tar-annotation=true")
+	}
 	if c.Options.DebugLogPath != "" {
 		cmdArgs = append(cmdArgs, "-debug-log="+c.Options.DebugLogPath)
 	}
@@ -163,6 +181,17 @@ func (c *Client) Create(ctx context.Context, args StartArgs) error {
 		args.ID,
 	)
 	cmd := exec.CommandContext(ctx, c.Binary, cmdArgs...)
+	if args.SeededRootfs {
+		if cmd.Err == nil && !filepath.IsAbs(cmd.Path) {
+			// exec.Command resolves a bare name via the caller's PATH before
+			// chdir. Keep that resolution even with a relative PATH entry.
+			cmd.Path, err = filepath.Abs(cmd.Path)
+			if err != nil {
+				return err
+			}
+		}
+		cmd.Dir = args.BundleDir
+	}
 	cmd.Env = os.Environ()
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
@@ -200,11 +229,95 @@ func validateExtraArgs(args []string) error {
 			return fmt.Errorf("invalid extra_args entry %q: use --name=value (including booleans)", arg)
 		}
 		switch name {
-		case "--root", "--platform", "--network", "--overlay2", "--ignore-cgroups", "--debug-log", "--bundle", "--filestore-adopt-dir", "--filestore-clone-on-adopt", "--filestore-parent-mountns":
+		case "--root", "--platform", "--network", "--overlay2", "--ignore-cgroups", "--debug-log", "--bundle", "--filestore-adopt-dir", "--filestore-clone-on-adopt", "--filestore-parent-mountns", "--allow-rootfs-tar-annotation", "--restore-spec-validation":
 			return fmt.Errorf("extra_args cannot override sandboxd-managed flag %s", name)
 		}
 	}
 	return nil
+}
+
+// forSeededCreate changes only this invocation. Keep the old meaning of every
+// host path affected by cmd.Dir; bare executable names still use PATH lookup.
+func (c *Client) forSeededCreate(args StartArgs) (*Client, StartArgs, error) {
+	normalized := *c
+	normalized.Options.ExtraArgs = append([]string(nil), c.Options.ExtraArgs...)
+	paths := []*string{&normalized.RootDir, &normalized.Options.FilestoreDir, &normalized.Options.DebugLogPath, &args.BundleDir, &args.FilestoreAdoptDir}
+	if strings.ContainsRune(normalized.Binary, filepath.Separator) {
+		paths = append(paths, &normalized.Binary)
+	}
+	for _, value := range paths {
+		if *value == "" {
+			continue
+		}
+		absolute, err := absoluteHostPath(*value)
+		if err != nil {
+			return nil, args, err
+		}
+		*value = absolute
+	}
+	if args.RootOverlay != "" {
+		value, err := absoluteOverlayDirectory(args.RootOverlay)
+		if err != nil {
+			return nil, args, err
+		}
+		args.RootOverlay = value
+	}
+	// Path-valued flags in the pinned runsc/config/flags.go. Other flags are
+	// booleans, numbers, enums, addresses or container-relative values.
+	for i, arg := range normalized.Options.ExtraArgs {
+		key, value, _ := strings.Cut(arg, "=")
+		absolute, err := absoluteRunscPathFlag(key, value)
+		if err != nil {
+			return nil, args, err
+		}
+		normalized.Options.ExtraArgs[i] = key + "=" + absolute
+	}
+	return &normalized, args, nil
+}
+
+func absoluteRunscPathFlag(key, value string) (string, error) {
+	switch key {
+	case "--log", "--debug-log", "--panic-log", "--coverage-report", "--pcap-log", "--final-metrics-log", "--profiling-metrics-log", "--platform_device_path", "--profile-block", "--profile-cpu", "--profile-heap", "--profile-mutex", "--trace", "--pod-init-config", "--shared-root", "--TESTONLY-autosave-image-path":
+		if value != "" && !(key == "--profiling-metrics-log" && value == "-") {
+			return absoluteHostPath(value)
+		}
+	case "--overlay2":
+		return absoluteOverlayDirectory(value)
+	}
+	return value, nil
+}
+
+func absoluteHostPath(value string) (string, error) {
+	absolute, err := filepath.Abs(value)
+	if err == nil && strings.HasSuffix(value, string(filepath.Separator)) && !strings.HasSuffix(absolute, string(filepath.Separator)) {
+		// runsc uses a trailing slash to distinguish log directories.
+		absolute += string(filepath.Separator)
+	}
+	return absolute, err
+}
+
+func absoluteOverlayDirectory(value string) (string, error) {
+	prefix := ""
+	if strings.HasPrefix(value, "root:") || strings.HasPrefix(value, "all:") {
+		scope, rest, _ := strings.Cut(value, ":")
+		prefix, value = scope+":", rest
+	}
+	if !strings.HasPrefix(value, "dir=") {
+		return prefix + value, nil
+	}
+	directory, options, hasOptions := strings.Cut(strings.TrimPrefix(value, "dir="), ",")
+	if directory == "" {
+		return "", errors.New("root overlay directory is empty")
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return "", err
+	}
+	result := prefix + "dir=" + absolute
+	if hasOptions {
+		result += "," + options
+	}
+	return result, nil
 }
 
 func (c *Client) globalArgs() []string {

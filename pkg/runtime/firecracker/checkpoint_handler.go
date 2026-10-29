@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/inclusionAI/sandboxd/internal/firecrackerproto"
+	"github.com/inclusionAI/sandboxd/internal/util"
 	runtimecore "github.com/inclusionAI/sandboxd/pkg/runtime"
 	runtimecommon "github.com/inclusionAI/sandboxd/pkg/runtime/internal/common"
 	"github.com/sirupsen/logrus"
@@ -63,6 +64,9 @@ func (handler *Handler) Checkpoint(
 	instance.operationMu.Lock()
 	defer instance.operationMu.Unlock()
 	state := instance.snapshot()
+	if err := handler.validateManagedHostsRuntime(state.ManagedHosts); err != nil {
+		return err
+	}
 	if state.Exited || !state.Configured ||
 		!firecrackerProcessMatches(state.PID, handler.binary, state.APIPath, state.ID) {
 		return fmt.Errorf("Firecracker sandbox %s is not running", sandboxID)
@@ -310,6 +314,15 @@ func (handler *Handler) Checkpoint(
 		MemorySize:   memoryInfo.Size(),
 		VirtioFS:     hasVirtioFS,
 		Compat:       compat,
+	}
+	if state.ManagedHosts != nil {
+		files.ManagedHosts = filepath.Join(config.Directory, runtimecore.ManagedHostsStateFile)
+		if err := runtimecore.WriteManagedHostsState(config.Directory, state.ManagedHosts); err != nil {
+			instance.markBaseMemoryLineageLost()
+			discardUnsealedFirecrackerCheckpoint(files)
+			return errors.Join(resumeErr, fmt.Errorf("write Firecracker checkpoint managed hosts: %w", err))
+		}
+		manifest.ManagedHosts = runtimecore.ManagedHostsStateFile
 	}
 	if base != "" {
 		manifest.BaseMemory = filepath.Base(filepath.Dir(base))
@@ -767,6 +780,7 @@ func discardUnsealedFirecrackerCheckpoint(files firecrackerCheckpointFiles) {
 		files.Memory,
 		files.Overlay,
 		files.VirtioFSState,
+		files.ManagedHosts,
 	} {
 		if path != "" {
 			_ = os.Remove(path)
@@ -873,12 +887,32 @@ func (handler *Handler) Restore(
 	startConfig runtimecore.StartConfig,
 ) (retErr error) {
 	tStarted := time.Now()
+	for _, root := range []string{handler.sandboxRoot, handler.storageRoot} {
+		if root == "" {
+			continue
+		}
+		target, err := util.JoinWithinRoot(root, startConfig.ID)
+		if err != nil {
+			return err
+		}
+		if err := util.ValidateRestoreDirectorySeparation(startConfig.CheckpointDir, target); err != nil {
+			return err
+		}
+	}
+	if handler.runtimeRoot != "" {
+		if err := util.ValidateRestoreDirectorySeparation(startConfig.CheckpointDir, handler.runtimeDirectory(startConfig.ID)); err != nil {
+			return err
+		}
+	}
 	artifact, err := openFirecrackerCheckpoint(startConfig.CheckpointDir)
 	if err != nil {
 		return fmt.Errorf(
 			"open Firecracker checkpoint %s: %w",
 			startConfig.CheckpointDir, err,
 		)
+	}
+	if err := handler.restoreManagedHosts(&startConfig, artifact); err != nil {
+		return err
 	}
 	if artifact.Manifest != nil && artifact.Manifest.VirtioFS &&
 		!handler.virtioFSEnabled {
@@ -919,6 +953,9 @@ func (handler *Handler) Restore(
 	})
 	if err != nil {
 		return fmt.Errorf("generate Firecracker restore OCI metadata: %w", err)
+	}
+	if err := util.ValidateRestoreDirectorySeparation(startConfig.CheckpointDir, bundlePath); err != nil {
+		return err
 	}
 	plan, err := prepareFirecrackerStorage(spec, startConfig, handler.virtioFSEnabled)
 	if err != nil {
@@ -1084,16 +1121,17 @@ func (handler *Handler) Restore(
 	}
 	instance := &firecrackerInstance{
 		state: firecrackerPersistedState{
-			ID:          startConfig.ID,
-			PID:         command.Process.Pid,
-			BundlePath:  bundlePath,
-			APIPath:     apiPath,
-			VsockPath:   vsockPath,
-			OverlayPath: checkpointFiles.Overlay,
-			VirtioFS:    virtioFSState,
-			MemoryMiB:   uint32(memorySize >> 20),
-			Vcpus:       restoredVcpus,
-			CreatedAt:   time.Now().Format(time.RFC3339Nano),
+			ManagedHosts: cloneFirecrackerManagedHosts(startConfig.ManagedHosts),
+			ID:           startConfig.ID,
+			PID:          command.Process.Pid,
+			BundlePath:   bundlePath,
+			APIPath:      apiPath,
+			VsockPath:    vsockPath,
+			OverlayPath:  checkpointFiles.Overlay,
+			VirtioFS:     virtioFSState,
+			MemoryMiB:    uint32(memorySize >> 20),
+			Vcpus:        restoredVcpus,
+			CreatedAt:    time.Now().Format(time.RFC3339Nano),
 		},
 		done:    make(chan struct{}),
 		vmmExit: make(chan error, 1),

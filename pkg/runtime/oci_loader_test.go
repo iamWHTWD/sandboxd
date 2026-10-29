@@ -112,6 +112,7 @@ func TestGenerateOciAppliesRequestedRootfsMode(t *testing.T) {
 		baseReadonly       bool
 		requestReadonly    bool
 		writableLayerBytes uint64
+		providerWritable   bool
 		wantReadonly       bool
 	}{
 		{
@@ -128,6 +129,8 @@ func TestGenerateOciAppliesRequestedRootfsMode(t *testing.T) {
 			requestReadonly:    true,
 			writableLayerBytes: 1,
 		},
+		{name: "provider preserves writable final root", requestReadonly: true, providerWritable: true},
+		{name: "quota and provider preserve writable root", requestReadonly: true, writableLayerBytes: 1, providerWritable: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,6 +147,7 @@ func TestGenerateOciAppliesRequestedRootfsMode(t *testing.T) {
 					RootfsReadonly:          tt.requestReadonly,
 					Resources:               &runtime.LinuxSandboxResources{},
 					WritableLayerLimitBytes: tt.writableLayerBytes,
+					SpecUpdates:             &SpecUpdates{RequiresHostWritableRootfs: tt.providerWritable},
 				},
 			})
 			if err != nil {
@@ -319,4 +323,31 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestGenerateOciRejectsManagedRootfsAnnotationsAfterAllUpdates(t *testing.T) {
+	for _, key := range []string{GVisorRootfsTarUpperAnnotation, GVisorRootfsTarUpperAnnotation + ".container", "dev.gvisor.flag.allow-rootfs-tar-annotation", "dev.gvisor.flag.restore-spec-validation"} {
+		for _, source := range []string{"base", "request", "provider"} {
+			t.Run(source+"/"+key, func(t *testing.T) {
+				loader, err := NewBundleLoader("", t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				config := StartConfig{Rootfs: t.TempDir(), DisableCgroup: true}
+				annotations := map[string]string{key: "untrusted"}
+				switch source {
+				case "base":
+					loader.baseSpec.Annotations = annotations
+				case "request":
+					config.Annotations = annotations
+				case "provider":
+					config.SpecUpdates = &SpecUpdates{Annotations: annotations}
+				}
+				_, _, err = loader.GenerateOci(OciLoadOptions{SandboxID: "managed-annotation", Config: config, UseGVisorRootfsImageAnnotations: true})
+				if err == nil || !strings.Contains(err.Error(), "managed by sandboxd") {
+					t.Fatalf("reserved annotation accepted: %v", err)
+				}
+			})
+		}
+	}
 }

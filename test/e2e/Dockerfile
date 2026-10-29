@@ -50,6 +50,7 @@ COPY output/oom-hog /usr/local/bin/oom-hog
 COPY output/network-policy-client /usr/local/bin/network-policy-client
 COPY output/checkpoint-restore /usr/local/bin/checkpoint-restore
 COPY test/e2e/e2e-run.sh /usr/local/bin/sandboxd-e2e-run
+COPY test/e2e/writable-hosts.sh /usr/local/bin/sandboxd-writable-hosts
 COPY test/e2e/host-mount-rw.sh /usr/local/bin/sandboxd-host-mount-rw
 
 RUN chmod 0755 \

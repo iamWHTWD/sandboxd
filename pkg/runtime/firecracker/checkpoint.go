@@ -51,6 +51,7 @@ type firecrackerSparseExtent struct {
 }
 
 type firecrackerCheckpointFiles struct {
+	ManagedHosts  string
 	State         string
 	Memory        string
 	Overlay       string

@@ -200,3 +200,54 @@ trap 'printf "pid=%%s; events=%%s\n" "${SANDBOXD_PID}" "${EVENTS}"' EXIT
 		})
 	}
 }
+
+func TestWritableHostsRestartHandshake(t *testing.T) {
+	function := e2eFunctions(t, "run_writable_hosts_check")
+	for _, exitCode := range []int{0, 7} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
+			script := fmt.Sprintf(`
+SANDBOXD_HOME=%q
+SANDBOXD_ROOT=/test-owned-root
+SOCKET=/test-owned-socket
+HOSTS_CHILD_PID=""
+log() { :; }
+sleep() { command sleep 0.01; }
+crash_and_restart_sandboxd() { printf 'test-owned-restart\n'; }
+bash() {
+    # Use a real child shell, like the installed script: macOS bash 3.2 may
+    # terminate a background shell-function loop early after command sleep.
+    command bash -c '
+        set -eu
+        mkdir "${TEST_DIR}"
+        if [ %d != 0 ]; then exit %d; fi
+        touch "${TEST_DIR}/restart.request"
+        until [ -f "${TEST_DIR}/restart.done" ]; do sleep 0.01; done
+        printf "child-passed\n"
+    '
+}
+`, t.TempDir(), exitCode, exitCode) + function + "run_writable_hosts_check runsc /fixture case\n"
+			output, err := runE2EHelper(t, script)
+			if exitCode == 0 {
+				if err != nil || strings.Count(output, "test-owned-restart") != 1 || !strings.Contains(output, "child-passed") {
+					t.Fatalf("restart handshake: err=%v output=%s", err, output)
+				}
+			} else if err == nil || strings.Contains(output, "test-owned-restart") {
+				t.Fatalf("failed child was accepted or restarted: err=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
+func TestHostsOnlyDoesNotRequireDirectDNSFixture(t *testing.T) {
+	functions := e2eFunctions(t, "fail", "check_direct_dns_dependencies")
+	script := `
+E2E_RUNTIME=runsc
+DISABLE_CGROUP=0
+HOSTS_ONLY=1
+command() { printf 'unexpected dependency check\n'; return 1; }
+` + functions + "check_direct_dns_dependencies\nprintf 'passed\n'\n"
+	output, err := runE2EHelper(t, script)
+	if err != nil || output != "passed\n" {
+		t.Fatalf("hosts-only used direct DNS fixture: err=%v output=%s", err, output)
+	}
+}

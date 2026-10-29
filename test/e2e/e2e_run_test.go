@@ -27,9 +27,9 @@ import (
 
 // Load only the helpers under test: sourcing the entrypoint would start
 // privileged workloads and install its destructive cleanup trap.
-func e2eFunctions(t *testing.T, names ...string) string {
+func shellFunctions(t *testing.T, filename string, names ...string) string {
 	t.Helper()
-	data, err := os.ReadFile("e2e-run.sh")
+	data, err := os.ReadFile(filename)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func runE2EHelper(t *testing.T, script string) (string, error) {
 }
 
 func TestDirectDNSDependencies(t *testing.T) {
-	functions := e2eFunctions(t, "fail", "check_direct_dns_dependencies")
+	functions := shellFunctions(t, "e2e-run.sh", "fail", "check_direct_dns_dependencies")
 	for _, runtime := range []string{"all", "runsc", "runc"} {
 		for _, missing := range []string{"none", "dnsmasq", "timeout"} {
 			t.Run(runtime+"/"+missing, func(t *testing.T) {
@@ -113,7 +113,7 @@ command() { printf 'unexpected dependency check\n'; return 1; }
 }
 
 func TestCheckpointMemoryBudget(t *testing.T) {
-	function := e2eFunctions(t, "checkpoint_memory_mb")
+	function := shellFunctions(t, "e2e-run.sh", "checkpoint_memory_mb")
 	for _, tc := range []struct {
 		runtime, platform, want string
 	}{
@@ -133,7 +133,7 @@ func TestCheckpointMemoryBudget(t *testing.T) {
 }
 
 func TestStopSandboxd(t *testing.T) {
-	functions := e2eFunctions(t, "log", "fail", "stop_sandboxd")
+	functions := shellFunctions(t, "e2e-run.sh", "log", "fail", "stop_sandboxd")
 	for _, tc := range []struct {
 		name, message, tap                         string
 		stopAfter, waitStatus, bridge, links, term int
@@ -203,7 +203,7 @@ trap 'printf "pid=%%s; events=%%s\n" "${SANDBOXD_PID}" "${EVENTS}"' EXIT
 }
 
 func TestWritableHostsRestartHandshake(t *testing.T) {
-	function := e2eFunctions(t, "run_writable_hosts_check")
+	function := shellFunctions(t, "e2e-run.sh", "run_writable_hosts_check")
 	for _, exitCode := range []int{0, 7} {
 		t.Run(fmt.Sprint(exitCode), func(t *testing.T) {
 			script := fmt.Sprintf(`
@@ -240,7 +240,7 @@ bash() {
 }
 
 func TestHostsOnlyDoesNotRequireDirectDNSFixture(t *testing.T) {
-	functions := e2eFunctions(t, "fail", "check_direct_dns_dependencies")
+	functions := shellFunctions(t, "e2e-run.sh", "fail", "check_direct_dns_dependencies")
 	script := `
 E2E_RUNTIME=runsc
 DISABLE_CGROUP=0
@@ -256,7 +256,7 @@ command() { printf 'unexpected dependency check\n'; return 1; }
 // A restored virtio-fs guest owns a shared memory clone as well as its disk.
 // The test fixture must not mistake filestore ENOSPC for a runtime regression.
 func TestHostsConcurrencyFilestoreBudget(t *testing.T) {
-	function := e2eFunctions(t, "e2e_filestore_size")
+	function := shellFunctions(t, "e2e-run.sh", "e2e_filestore_size")
 	for _, tc := range []struct {
 		name, runtime, checkpointMode string
 		count, virtiofs               int
@@ -304,6 +304,91 @@ func TestHostsConcurrencyFilestoreBudget(t *testing.T) {
 			}
 			if capacity < minimum {
 				t.Fatalf("capacity %d MiB cannot hold %d guests; need at least %d MiB", capacity, tc.count, minimum)
+			}
+		})
+	}
+}
+
+// A failed List is not evidence that rollback removed the sandbox. Exercise
+// both empty and partial failed responses before allowing the clean marker.
+func TestWritableHostsInventoryAbsence(t *testing.T) {
+	common, err := os.ReadFile("writable-hosts-common.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                  string
+		present, listExitCode int
+		wantExitCode          int
+	}{
+		{"absent", 0, 0, 0},
+		{"present", 1, 0, 1},
+		{"unavailable", 0, 23, 23},
+		{"partial_response", 1, 23, 23},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := string(common) + fmt.Sprintf(`
+sbox_cmd() {
+    [ "$1" = list ]
+    printf 'ID\nother-sandbox\n'
+    if [ %d = 1 ]; then printf 'test-sandbox\n'; fi
+    return %d
+}
+fail() { printf '%%s\n' "$*" >&2; exit 1; }
+assert_hosts_inventory_absent %q test-sandbox
+printf 'clean\n'
+`, tc.present, tc.listExitCode, t.TempDir()+"/inventory")
+			output, err := runE2EHelper(t, script)
+			if tc.wantExitCode == 0 {
+				if err != nil || output != "clean\n" {
+					t.Fatalf("absent sandbox: err=%v output=%s", err, output)
+				}
+				return
+			}
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok || exitErr.ExitCode() != tc.wantExitCode || strings.Contains(output, "clean") {
+				t.Fatalf("false cleanup success: err=%v want exit=%d output=%s", err, tc.wantExitCode, output)
+			}
+		})
+	}
+}
+
+func TestHostsOnlySourceRunner(t *testing.T) {
+	function := shellFunctions(t, "run.sh", "configure_hosts_suite")
+	for _, tc := range []struct {
+		name, regression  string
+		only, count, soak int
+		wantSecond        int
+		wantError         bool
+	}{
+		{"default", "", 0, 0, 0, 1, false},
+		{"ordinary_network_soak", "", 0, 0, 1, 1, false},
+		{"hosts_only", "", 1, 0, 0, 0, false},
+		{"regression", "relative-bind", 0, 0, 0, 0, false},
+		{"concurrency", "", 0, 2, 0, 0, false},
+		{"invalid_hosts_only", "", 2, 0, 0, 1, true},
+		{"hosts_only_network_soak", "", 1, 0, 1, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := fmt.Sprintf(`
+E2E_HOSTS_ONLY=%d
+E2E_HOSTS_REGRESSION=%q
+E2E_HOSTS_CONCURRENCY=%d
+E2E_HOSTS_ROOTFS_KIND=erofs
+E2E_NETWORK_SOAK=%d
+E2E_RUN_CGROUP_DISABLED=1
+fail() { printf '%%s\n' "$*" >&2; exit 1; }
+`, tc.only, tc.regression, tc.count, tc.soak) + function + `
+configure_hosts_suite
+printf 'second_pass=%s\n' "${E2E_RUN_CGROUP_DISABLED}"
+`
+			output, err := runE2EHelper(t, script)
+			if tc.wantError {
+				if err == nil || strings.Contains(output, "second_pass=") {
+					t.Fatalf("invalid mode accepted: err=%v output=%s", err, output)
+				}
+			} else if err != nil || output != fmt.Sprintf("second_pass=%d\n", tc.wantSecond) {
+				t.Fatalf("second suite selection: err=%v output=%s", err, output)
 			}
 		})
 	}

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	runtime "github.com/inclusionAI/sandboxd/api/runtime/v1"
 	"github.com/inclusionAI/sandboxd/pkg/errord"
@@ -403,4 +404,172 @@ func TestRestoreOverlappingInputIsRejectedBeforeCleanup(t *testing.T) {
 			})
 		}
 	}
+}
+
+// A failed competing request must never clean a checkpoint another request
+// successfully published into the same caller-owned directory.
+func TestCheckpointConcurrentDirectoryFailurePreservesWinner(t *testing.T) {
+	handler := newCheckpointTestHandler()
+	firstEntered, secondEntered := make(chan struct{}), make(chan struct{})
+	releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})
+	var firstOnce, secondOnce sync.Once
+	unblockFirst := func() { firstOnce.Do(func() { close(releaseFirst) }) }
+	unblockSecond := func() { secondOnce.Do(func() { close(releaseSecond) }) }
+	defer unblockFirst()
+	defer unblockSecond()
+	handler.checkpointFn = func(ctx context.Context, config svc.CheckpointConfig) error {
+		if config.ID == "sbox-winner" {
+			close(firstEntered)
+			select {
+			case <-releaseFirst:
+				return os.WriteFile(filepath.Join(config.Directory, "checkpoint.img"), []byte("winner"), 0600)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		close(secondEntered)
+		select {
+		case <-releaseSecond:
+			return errors.New("competing checkpoint failed")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	service := newTestService(t, map[string]svc.Handler{"runsc": handler})
+	for _, id := range []string{"sbox-winner", "sbox-contender"} {
+		storeRunningSandbox(t, service, id, "runsc")
+	}
+	directory := t.TempDir()
+	start := func(id string) <-chan error {
+		result := make(chan error, 1)
+		go func() {
+			_, err := service.Checkpoint(context.Background(), &runtime.CheckpointRequest{
+				ID: id, CheckpointDir: directory, TimeoutSeconds: 10,
+			})
+			result <- err
+		}()
+		return result
+	}
+	firstResult := start("sbox-winner")
+	select {
+	case <-firstEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first checkpoint did not enter runtime")
+	}
+	secondResult := start("sbox-contender")
+	var secondErr error
+	secondFinished := false
+	select {
+	case <-secondEntered:
+		// The buggy implementation allows both requests into the runtime.
+	case secondErr = <-secondResult:
+		secondFinished = true
+	case <-time.After(5 * time.Second):
+		t.Fatal("competing checkpoint neither entered runtime nor returned")
+	}
+	unblockFirst()
+	require.NoError(t, <-firstResult)
+	unblockSecond()
+	if !secondFinished {
+		secondErr = <-secondResult
+	}
+	assert.Equal(t, codes.FailedPrecondition, status.Code(secondErr))
+	data, err := os.ReadFile(filepath.Join(directory, "checkpoint.img"))
+	require.NoError(t, err, "competing cleanup removed the successful checkpoint")
+	assert.Equal(t, "winner", string(data))
+	assert.DirExists(t, directory, "caller-owned output directory must survive")
+}
+
+func TestCheckpointDirectoryReservations(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.Mkdir(active, 0700))
+	for name, candidate := range map[string]string{
+		"same":             active,
+		"normalized alias": active + "/../checkpoint/.",
+		"parent":           root,
+		"child":            filepath.Join(active, "child"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &sandboxService{}
+			require.NoError(t, service.beginCheckpoint("first", active))
+			err := service.beginCheckpoint("second", candidate)
+			require.ErrorIs(t, err, errord.ErrFailedPrecondition)
+			assert.ErrorContains(t, err, "already in use")
+			assert.Len(t, service.checkpointing, 1)
+			service.finishCheckpoint("first")
+			require.NoError(t, service.beginCheckpoint("second", candidate))
+			service.finishCheckpoint("second")
+		})
+	}
+	service := &sandboxService{}
+	require.NoError(t, service.beginCheckpoint("first", active))
+	require.NoError(t, service.beginCheckpoint("second", active+"-suffix"))
+	require.ErrorIs(t, service.beginCheckpoint("first", filepath.Join(root, "other")), errord.ErrFailedPrecondition)
+	assert.Len(t, service.checkpointing, 2)
+	alias := filepath.Join(root, "symlink")
+	require.NoError(t, os.Symlink(active, alias))
+	require.ErrorIs(t, service.beginCheckpoint("third", alias), errord.ErrInvalidArgument)
+}
+
+func TestCheckpointDisjointDirectoriesRunConcurrentlyAndReleaseOnFailure(t *testing.T) {
+	handler := newCheckpointTestHandler()
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	handler.checkpointFn = func(ctx context.Context, config svc.CheckpointConfig) error {
+		entered <- config.ID
+		select {
+		case <-release:
+			if config.ID == "sbox-failure" {
+				return errors.New("checkpoint failed")
+			}
+			return os.WriteFile(filepath.Join(config.Directory, "checkpoint.img"), []byte("independent"), 0600)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	service := newTestService(t, map[string]svc.Handler{"runsc": handler})
+	root := t.TempDir()
+	directories := map[string]string{
+		"sbox-failure": filepath.Join(root, "first"),
+		"sbox-success": filepath.Join(root, "second"),
+	}
+	results := make(map[string]<-chan error)
+	for id, directory := range directories {
+		storeRunningSandbox(t, service, id, "runsc")
+		require.NoError(t, os.Mkdir(directory, 0700))
+		result := make(chan error, 1)
+		results[id] = result
+		go func() {
+			_, err := service.Checkpoint(context.Background(), &runtime.CheckpointRequest{
+				ID: id, CheckpointDir: directory, TimeoutSeconds: 10,
+			})
+			result <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("disjoint checkpoints did not enter runtime concurrently")
+		}
+	}
+	unblock()
+	require.Error(t, <-results["sbox-failure"])
+	require.NoError(t, <-results["sbox-success"])
+	assert.FileExists(t, filepath.Join(directories["sbox-success"], "checkpoint.img"))
+	assert.DirExists(t, directories["sbox-failure"], "caller-owned output directory must survive cleanup")
+	assert.Empty(t, service.checkpointing)
+	// A failed generation releases both its sandbox ID and directory reservation.
+	handler.mu.Lock()
+	handler.checkpointFn = nil
+	handler.mu.Unlock()
+	_, err := service.Checkpoint(context.Background(), &runtime.CheckpointRequest{
+		ID: "sbox-failure", CheckpointDir: directories["sbox-failure"], TimeoutSeconds: 5,
+	})
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(directories["sbox-failure"], "checkpoint.img"))
 }

@@ -67,6 +67,16 @@ func validateManagedHostsSpec(state *runtimecore.ManagedHostsState, spec *runtim
 		if spec.Root.Readonly || hostsMountOwned(spec) {
 			return errors.New("managed rootfs hosts require a writable root without a mount owning /etc/hosts")
 		}
+		// A gofer in an explicit user namespace sees translated ownership and
+		// ACLs. Host-side stat/xattr metadata cannot safely seed that view.
+		// Direct EROFS is decoded by runsc using image IDs instead.
+		if _, directEROFS := runscNVProxyEROFSImageSource(spec); !directEROFS && spec.Linux != nil {
+			for _, namespace := range spec.Linux.Namespaces {
+				if namespace.Type == "user" {
+					return errors.New("managed rootfs hosts do not support directory roots with an explicit user namespace; use a direct EROFS root or an external hosts mount")
+				}
+			}
+		}
 		// RootfsTarUpperPath ignores the unsuffixed key in containerd's
 		// multi-container mode. sandboxd launches standalone containers.
 		if spec.Annotations["io.kubernetes.cri.container-name"] != "" || spec.Annotations["io.kubernetes.cri.container-type"] != "" || spec.Annotations["io.kubernetes.cri-o.ContainerType"] != "" {

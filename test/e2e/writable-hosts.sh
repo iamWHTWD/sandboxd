@@ -4,6 +4,7 @@
 
 # This is server Start/Checkpoint/Start(CheckpointInfo) coverage, not runsc CLI.
 set -Eeuo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/writable-hosts-common.sh"
 : "${TEST_DIR:?set TEST_DIR to a new absolute directory visible to sandboxd}"
 : "${ROOTFS:?set ROOTFS to the lower EROFS image or directory}"
 : "${SANDBOXD_ROOT:?set SANDBOXD_ROOT to the sandboxd runtime root}"
@@ -46,27 +47,24 @@ else
     LOWER_HASH="$(sha256sum "${ROOTFS}")"
 fi
 
-workload='set -eu
-test -f /etc/hosts
-test "$(stat -c %a /etc/hosts)" = 644
-test "$(stat -c %u:%g /etc/hosts)" = 0:0
-cat /etc/hosts > /var/hosts-at-entry
-# A replayed entrypoint is observable independently from mutable hosts.
-echo started >> /var/hosts-entry-count
-while :; do sleep 1; done'
 ids+=("${SOURCE}")
 helper --action start --runtime "${RUNTIME}" --rootfs "${ROOTFS}" \
     --sandbox-id "${SOURCE}" --request-file "${REQUEST}" \
     --response-file "${TEST_DIR}/source-response.json" \
-    --memory-mb 256 --cpu 1000 --storage-mb 64 --workload-cmd "${workload}"
-guest "${SOURCE}" 'i=0; until test -f /var/hosts-entry-count; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
-source_ip="$(jq -er '.sandbox_ip' "${TEST_DIR}/source-response.json")"
-printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n%s %s\n' \
-    "${source_ip}" "${EXPECTED_HOSTNAME}" > "${TEST_DIR}/expected-initial-hosts"
-sbox_cmd exec "${SOURCE}" /bin/cat /var/hosts-at-entry > "${TEST_DIR}/actual-initial-hosts"
-cmp "${TEST_DIR}/expected-initial-hosts" "${TEST_DIR}/actual-initial-hosts"
-guest "${SOURCE}" '! grep -q " /etc/hosts " /proc/mounts'
+    --memory-mb 256 --cpu 1000 --storage-mb 64 --workload-cmd "${HOSTS_WORKLOAD}"
+verify_initial_hosts "${SOURCE}" "${TEST_DIR}/source-response.json" "${TEST_DIR}/source"
 pass 'first process sees exact managed hosts, root:root/0644, ordinary rootfs file'
+
+# Checkpoint output belongs to the caller, not to directories Delete owns.
+owned_output="${SANDBOXD_ROOT}/containers/${SOURCE}/invalid-checkpoint"
+if helper --action checkpoint --sandbox-id "${SOURCE}" --checkpoint-dir "${owned_output}" \
+    --leave-running=true --snapshot-type Full > "${TEST_DIR}/owned-output.log" 2>&1; then
+    fail 'checkpoint accepted source-owned output'
+fi
+grep -q 'overlap' "${TEST_DIR}/owned-output.log" || fail 'owned output failed for an unexpected reason'
+test ! -e "${owned_output}" || fail 'rejected checkpoint left output behind'
+guest "${SOURCE}" 'cmp /etc/hosts /var/hosts-at-entry; test "$(wc -l < /var/hosts-entry-count)" = 1'
+pass 'source-owned checkpoint output rejected before capture; source remains usable'
 
 guest "${SOURCE}" 'echo "192.0.2.10 appended" >> /etc/hosts
 grep -q appended /etc/hosts
@@ -170,9 +168,7 @@ negative() {
     }
     # Observe automatic rollback before any explicit Delete can repair it.
     test ! -e "${SANDBOXD_ROOT}/containers/${id}" || fail "${mode} leaked target bundle"
-    if sbox_cmd list | awk 'NR > 1 { print $1 }' | grep -Fxq "${id}"; then
-        fail "${mode} leaked a sandbox record"
-    fi
+    assert_hosts_inventory_absent "${TEST_DIR}/negative-${mode}.inventory" "${id}"
     sbox_cmd delete "${id}"
     rm -rf "${bad}"
     pass "invalid ${mode} rejected without target bundle leak"

@@ -5,6 +5,7 @@
 # Run against a test-owned daemon. The outer runner owns daemon/FUSE lifetimes
 # and prepares the immutable root. Missing prerequisites are errors, not skips.
 set -Eeuo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/writable-hosts-common.sh"
 : "${CASE_MODE:?set CASE_MODE to nydus or relative-bind}"
 : "${TEST_DIR:?set TEST_DIR to a new absolute evidence directory}"
 : "${ROOTFS:?set ROOTFS to an absolute directory root}"
@@ -122,24 +123,11 @@ REQUEST="${TEST_DIR}/request.json"
 CHECKPOINT="${TEST_DIR}/checkpoint"
 sha256sum /etc/hosts > "${TEST_DIR}/host-hosts.before.sha256"
 sha256sum "${ROOTFS}/etc/hosts" > "${TEST_DIR}/lower-hosts.before.sha256"
-workload='set -eu
-test -f /etc/hosts
-test "$(stat -c %a /etc/hosts)" = 644
-test "$(stat -c %u:%g /etc/hosts)" = 0:0
-cat /etc/hosts > /var/hosts-at-entry
-echo started >> /var/hosts-entry-count
-while :; do sleep 1; done'
 ids+=("${SOURCE}")
 helper --action start --runtime runsc --rootfs "${ROOTFS}" --sandbox-id "${SOURCE}" \
     --request-file "${REQUEST}" --response-file "${TEST_DIR}/start-response.json" \
-    --memory-mb 256 --cpu 1000 --storage-mb 64 --workload-cmd "${workload}"
-guest "${SOURCE}" 'i=0; until test -f /var/hosts-entry-count; do i=$((i+1)); test "$i" -lt 100; sleep 0.1; done'
-source_ip="$(jq -er '.sandbox_ip' "${TEST_DIR}/start-response.json")"
-printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n%s %s\n' \
-    "${source_ip}" "${EXPECTED_HOSTNAME}" > "${TEST_DIR}/expected-initial-hosts"
-sbox_cmd exec "${SOURCE}" /bin/cat /var/hosts-at-entry > "${TEST_DIR}/actual-initial-hosts"
-cmp "${TEST_DIR}/expected-initial-hosts" "${TEST_DIR}/actual-initial-hosts"
-guest "${SOURCE}" '! grep -q " /etc/hosts " /proc/mounts'
+    --memory-mb 256 --cpu 1000 --storage-mb 64 --workload-cmd "${HOSTS_WORKLOAD}"
+verify_initial_hosts "${SOURCE}" "${TEST_DIR}/start-response.json" "${TEST_DIR}/source"
 if [ "${CASE_MODE}" = relative-bind ]; then
     printf 'bundle-relative\n' > "${TEST_DIR}/expected-relative-marker"
     jq '.mounts[] | select(.destination == "/relative-proof")' \
@@ -178,10 +166,5 @@ sha256sum -c "${TEST_DIR}/host-hosts.before.sha256"
 sha256sum -c "${TEST_DIR}/lower-hosts.before.sha256"
 sbox_cmd delete "${RESTORED}"
 test ! -e "${SANDBOXD_ROOT}/containers/${RESTORED}" || fail 'Delete leaked restored bundle'
-sbox_cmd list > "${TEST_DIR}/inventory-after"
-for id in "${SOURCE}" "${RESTORED}"; do
-    if awk 'NR > 1 { print $1 }' "${TEST_DIR}/inventory-after" | grep -Fxq "${id}"; then
-        fail "Delete leaked sandbox record ${id}"
-    fi
-done
+assert_hosts_inventory_absent "${TEST_DIR}/inventory-after" "${SOURCE}" "${RESTORED}"
 pass 'checkpoint/restore after source deletion preserves hosts and bind identity without replay or source mutation; cleanup complete'

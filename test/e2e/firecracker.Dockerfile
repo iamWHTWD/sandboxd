@@ -46,6 +46,7 @@ COPY output/firecracker /usr/local/bin/firecracker
 COPY output/firecracker-vmlinux /opt/firecracker/vmlinux
 COPY output/firecracker-initrd.img /opt/firecracker/initrd.img
 COPY test/e2e/e2e-run.sh /usr/local/bin/sandboxd-e2e-run
+COPY test/e2e/writable-hosts-common.sh /usr/local/bin/writable-hosts-common.sh
 COPY test/e2e/writable-hosts.sh /usr/local/bin/sandboxd-writable-hosts
 COPY test/e2e/writable-hosts-regressions.sh /usr/local/bin/sandboxd-writable-hosts-regressions
 COPY test/e2e/writable-hosts-concurrency.sh /usr/local/bin/sandboxd-writable-hosts-concurrency

@@ -5,6 +5,7 @@
 # Run against a dedicated test daemon. Each phase releases all clients from a
 # barrier; timing measures overlapping client RPCs, not runtime execution slots.
 set -Eeuo pipefail
+source "$(dirname -- "${BASH_SOURCE[0]}")/writable-hosts-common.sh"
 : "${TEST_DIR:?set TEST_DIR to a fresh absolute directory}"
 : "${ROOTFS:?set ROOTFS to the lower EROFS image or directory}"
 : "${SANDBOXD_ROOT:?set SANDBOXD_ROOT to the daemon runtime root}"
@@ -57,12 +58,7 @@ assert_absent() {
         test ! -e "/run/sandboxd/firecracker/${digest}" || fail "${id} leaked Firecracker runtime state"
         test ! -e "${FILESTORE_ROOT}/.firecracker/${id}" || fail "${id} leaked Firecracker writable storage"
     fi
-    # Do not put the List RPC in an if pipeline: a transport failure must fail
-    # this assertion rather than look like an absent sandbox.
-    sbox_cmd list > "${PHASE_DIR}/${INDEX}.inventory"
-    if awk 'NR > 1 {print $1}' "${PHASE_DIR}/${INDEX}.inventory" | grep -Fxq "${id}"; then
-        fail "${id} leaked a sandbox record"
-    fi
+    assert_hosts_inventory_absent "${PHASE_DIR}/${INDEX}.inventory" "${id}"
 }
 
 verify_hosts() {
@@ -73,16 +69,8 @@ verify_hosts() {
     guest "${id}" 'test "$(wc -l < /var/hosts-entry-count)" = 1; ! grep -q " /etc/hosts " /proc/mounts'
 }
 
-workload='set -eu
-test -f /etc/hosts
-test "$(stat -c %a /etc/hosts)" = 644
-test "$(stat -c %u:%g /etc/hosts)" = 0:0
-cat /etc/hosts > /var/hosts-at-entry
-echo started >> /var/hosts-entry-count
-while :; do sleep 1; done'
-
 worker() {
-    local phase=$1 id ip restored_index
+    local phase=$1 id restored_index
     INDEX=$2
     PHASE_DIR="${TEST_DIR}/phases/${phase}"
     touch "${PHASE_DIR}/${INDEX}.ready"
@@ -97,12 +85,8 @@ worker() {
             timed start helper --action start --runtime "${RUNTIME}" --rootfs "${ROOTFS}" \
                 --sandbox-id "${id}" --request-file "${TEST_DIR}/request-${INDEX}.json" \
                 --response-file "${TEST_DIR}/response-${INDEX}.json" \
-                --memory-mb 256 --cpu 500 --storage-mb 64 --workload-cmd "${workload}"
-            guest "${id}" 'i=0; until test -f /var/hosts-entry-count; do i=$((i+1)); test "$i" -lt 300; sleep 0.1; done'
-            ip="$(jq -er '.sandbox_ip' "${TEST_DIR}/response-${INDEX}.json")"
-            printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n%s %s\n' "${ip}" "${EXPECTED_HOSTNAME}" > "${PHASE_DIR}/${INDEX}.expected-initial"
-            sbox_cmd exec "${id}" /bin/cat /var/hosts-at-entry > "${PHASE_DIR}/${INDEX}.actual-initial"
-            cmp "${PHASE_DIR}/${INDEX}.expected-initial" "${PHASE_DIR}/${INDEX}.actual-initial"
+                --memory-mb 256 --cpu 500 --storage-mb 64 --workload-cmd "${HOSTS_WORKLOAD}"
+            verify_initial_hosts "${id}" "${TEST_DIR}/response-${INDEX}.json" "${PHASE_DIR}/${INDEX}" 300
             guest "${id}" "printf '192.0.2.10 source-${INDEX}\\n' > /etc/hosts"
             ;;
         verify_sources)

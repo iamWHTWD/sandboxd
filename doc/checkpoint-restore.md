@@ -46,7 +46,9 @@ in progress for a source sandbox at a time.
 `checkpoint_dir` must be absolute, must not be `/`, and must not contain
 symbolic links. Its parent must already exist. The leaf may be absent, in which
 case sandboxd creates it, or it may be an existing empty directory. sandboxd
-never overwrites a non-empty directory.
+never overwrites a non-empty directory. Keep output outside the source sandbox's bundle and private runtime/storage directories; runsc rejects bundle overlap, and Firecracker also rejects overlap with its private runtime/storage directories.
+
+Concurrent checkpoints in the same daemon must use disjoint output directories. While an output directory is reserved by an active request, another request for that directory or any ancestor or descendant fails before writing output. This prevents failed-request cleanup from deleting another request's artifacts.
 
 The directory is the artifact boundary. Its contents are opaque and specific
 to the runtime that created them.
@@ -67,13 +69,9 @@ Save and restore must use matching runtime builds. Drain sandboxes before replac
 
 ## Managed hosts state
 
-New runsc and standard Firecracker sandboxes with a writable root initialize `/etc/hosts` as an ordinary file in their private root filesystem before the first workload process starts. No writable-hosts API switch is required. Writes, replacement with `sed -i` or rename, truncation, and deletion follow the root filesystem's checkpoint state. Restore retains the saved contents and existence state, including an empty or deleted file, and does not regenerate entries for the newly allocated IP address.
-
-An explicit caller or base-spec mount that owns `/etc/hosts` or a parent directory retains priority. Its data continues to follow the existing mount contract; external host data is not included in the snapshot. A finally read-only root retains the platform's read-only hosts mount. An explicit positive writable-layer limit retains the existing precedence over the requested root read-only setting. Runc, Kata, Firecracker PVM, `/etc/hostname`, and `/etc/resolv.conf` retain their existing behavior. File permissions still apply; initializing mode `0644` does not grant arbitrary sandbox users write access.
+The [sandbox hosts file contract](runtime.md#sandbox-hosts-file) defines initialization, permissions and mount precedence for runsc and standard Firecracker. Writes, replacement, truncation and deletion of managed `/etc/hosts` follow the private root filesystem's checkpoint state. Restore retains the saved contents and existence state and does not regenerate entries for the newly allocated IP address. Caller-owned mount contents retain their existing external-storage contract.
 
 The checkpoint directory carries `managed-hosts.json`, which records the schema, runtime, effective root mode, and hosts layout. A private-rootfs runsc checkpoint also contains the original immutable `rootfs-seed.tar` and its SHA-256. This seed supplies creation-time dependencies, not the current contents of hosts. Restore copies the seed into the new bundle, keeps the same relative annotation, and loads the saved native state without replaying initialization. Keep both files with the complete checkpoint, outside the separately managed `filestores/` directory. Deleting the source sandbox must not delete these caller-owned copies; each restored sandbox keeps its own initialization dependencies for later checkpoints.
-
-Runsc preserves OCI mount-source resolution relative to each bundle during both creation and restore; changing the runtime child working directory for seed loading must not reinterpret these paths relative to sandboxd. Directory-backed Nydus roots without xattr support can create managed-hosts snapshots, while direct EROFS metadata inspection remains strict. Restore uses the saved seed in either case and does not inspect the lower metadata again.
 
 The Firecracker v2 manifest declares `managed-hosts.json` and requires its digest. A missing, unrecognized, mismatched, or undeclared sidecar fails restore, including on warm restores. No tar is added to a Firecracker checkpoint, and restore never resends `Configure.Files`. The guest overlay preserves the actual hosts file. Small hosts metadata is synchronized when published; this does not make the VM, memory, or writable-disk checkpoint durable. The existing `sync_output` option still owns the complete checkpoint synchronization barrier.
 

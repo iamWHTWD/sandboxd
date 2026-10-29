@@ -337,3 +337,41 @@ func TestFirecrackerRestoreOverlapPreservesInput(t *testing.T) {
 		})
 	}
 }
+
+func TestFirecrackerCheckpointRejectsSandboxOwnedOutput(t *testing.T) {
+	for _, location := range []string{"bundle", "storage", "runtime"} {
+		t.Run(location, func(t *testing.T) {
+			handler := &Handler{sandboxRoot: t.TempDir(), storageRoot: t.TempDir(), runtimeRoot: t.TempDir()}
+			id := "sbox-protected-output"
+			owned := filepath.Join(handler.sandboxRoot, id)
+			if location == "storage" {
+				owned = filepath.Join(handler.storageRoot, id)
+			}
+			if location == "runtime" {
+				owned = handler.runtimeDirectory(id)
+			}
+			if err := os.MkdirAll(owned, 0700); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := filepath.Join(owned, "source-state")
+			if err := os.WriteFile(sentinel, []byte("preserved"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(owned, "checkpoint")
+			err := handler.Checkpoint(context.Background(), runtimecore.CheckpointConfig{ID: id, Directory: output})
+			if err == nil || !strings.Contains(err.Error(), "overlap") {
+				t.Fatalf("sandbox-owned output was not rejected before runtime access: %v", err)
+			}
+			if _, err := os.Stat(output); !os.IsNotExist(err) {
+				t.Fatalf("output was created: %v", err)
+			}
+			data, err := os.ReadFile(sentinel)
+			if err != nil || string(data) != "preserved" {
+				t.Fatalf("source changed: %q %v", data, err)
+			}
+			if err := handler.validateCheckpointDirectorySeparation(t.TempDir(), id); err != nil {
+				t.Fatalf("independent output rejected: %v", err)
+			}
+		})
+	}
+}

@@ -269,16 +269,20 @@ case "${E2E_FIRECRACKER_VIRTIOFS}" in
     0|1) ;;
     *) fail "E2E_FIRECRACKER_VIRTIOFS must be 0 or 1" ;;
 esac
-case "${E2E_HOSTS_REGRESSION}" in
-    ""|nydus|relative-bind) ;;
-    *) fail "E2E_HOSTS_REGRESSION must be empty, nydus, or relative-bind" ;;
-esac
-[[ "${E2E_HOSTS_CONCURRENCY}" =~ ^(0|[2-9]|[1-5][0-9]|6[0-4])$ ]] || fail "E2E_HOSTS_CONCURRENCY must be 0 or 2..64"
-case "${E2E_HOSTS_ROOTFS_KIND}" in erofs|directory) ;; *) fail "E2E_HOSTS_ROOTFS_KIND must be erofs or directory" ;; esac
-if [ -n "${E2E_HOSTS_REGRESSION}" ] || [ "${E2E_HOSTS_CONCURRENCY}" != 0 ]; then
-    [ "${E2E_NETWORK_SOAK}" = 0 ] || fail "hosts specialized modes cannot be combined with network soak"
-    E2E_RUN_CGROUP_DISABLED=0
-fi
+configure_hosts_suite() {
+    [[ "${E2E_HOSTS_ONLY}" =~ ^[01]$ ]] || fail "E2E_HOSTS_ONLY must be 0 or 1"
+    case "${E2E_HOSTS_REGRESSION}" in
+        ""|nydus|relative-bind) ;;
+        *) fail "E2E_HOSTS_REGRESSION must be empty, nydus, or relative-bind" ;;
+    esac
+    [[ "${E2E_HOSTS_CONCURRENCY}" =~ ^(0|[2-9]|[1-5][0-9]|6[0-4])$ ]] || fail "E2E_HOSTS_CONCURRENCY must be 0 or 2..64"
+    case "${E2E_HOSTS_ROOTFS_KIND}" in erofs|directory) ;; *) fail "E2E_HOSTS_ROOTFS_KIND must be erofs or directory" ;; esac
+    if [ "${E2E_HOSTS_ONLY}" = 1 ] || [ -n "${E2E_HOSTS_REGRESSION}" ] || [ "${E2E_HOSTS_CONCURRENCY}" != 0 ]; then
+        [ "${E2E_NETWORK_SOAK}" = 0 ] || fail "hosts specialized modes cannot be combined with network soak"
+        E2E_RUN_CGROUP_DISABLED=0
+    fi
+}
+configure_hosts_suite
 if [ "${E2E_HOSTS_REGRESSION}" = nydus ]; then
     for tool_path in "${E2E_HOSTS_NYDUS_IMAGE_HOST}" "${E2E_HOSTS_DISTILL_FS_HOST}"; do
         [[ "${tool_path}" = /* ]] && [ -f "${tool_path}" ] && [ -x "${tool_path}" ] || fail "Nydus regression requires absolute executable tool paths"

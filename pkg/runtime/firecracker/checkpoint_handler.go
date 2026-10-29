@@ -56,6 +56,9 @@ func (handler *Handler) Checkpoint(
 	config runtimecore.CheckpointConfig,
 ) (retErr error) {
 	sandboxID := config.ID
+	if err := handler.validateCheckpointDirectorySeparation(config.Directory, sandboxID); err != nil {
+		return err
+	}
 	tStarted := time.Now()
 	instance, err := handler.lookupInstance(sandboxID)
 	if err != nil {
@@ -64,6 +67,11 @@ func (handler *Handler) Checkpoint(
 	instance.operationMu.Lock()
 	defer instance.operationMu.Unlock()
 	state := instance.snapshot()
+	if state.BundlePath != "" {
+		if err := util.ValidateRestoreDirectorySeparation(config.Directory, state.BundlePath); err != nil {
+			return err
+		}
+	}
 	if err := handler.validateManagedHostsRuntime(state.ManagedHosts); err != nil {
 		return err
 	}
@@ -882,27 +890,36 @@ func checkRestoredMemorySize(memorySize int64) error {
 	return nil
 }
 
+// Checkpoint artifacts must outlive the sandbox directories removed by Delete.
+// Apply the same ownership boundary to capture and restore.
+func (handler *Handler) validateCheckpointDirectorySeparation(directory, sandboxID string) error {
+	for _, root := range []string{handler.sandboxRoot, handler.storageRoot} {
+		if root == "" {
+			continue
+		}
+		target, err := util.JoinWithinRoot(root, sandboxID)
+		if err != nil {
+			return err
+		}
+		if err := util.ValidateRestoreDirectorySeparation(directory, target); err != nil {
+			return err
+		}
+	}
+	if handler.runtimeRoot != "" {
+		if err := util.ValidateRestoreDirectorySeparation(directory, handler.runtimeDirectory(sandboxID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (handler *Handler) Restore(
 	ctx context.Context,
 	startConfig runtimecore.StartConfig,
 ) (retErr error) {
 	tStarted := time.Now()
-	for _, root := range []string{handler.sandboxRoot, handler.storageRoot} {
-		if root == "" {
-			continue
-		}
-		target, err := util.JoinWithinRoot(root, startConfig.ID)
-		if err != nil {
-			return err
-		}
-		if err := util.ValidateRestoreDirectorySeparation(startConfig.CheckpointDir, target); err != nil {
-			return err
-		}
-	}
-	if handler.runtimeRoot != "" {
-		if err := util.ValidateRestoreDirectorySeparation(startConfig.CheckpointDir, handler.runtimeDirectory(startConfig.ID)); err != nil {
-			return err
-		}
+	if err := handler.validateCheckpointDirectorySeparation(startConfig.CheckpointDir, startConfig.ID); err != nil {
+		return err
 	}
 	artifact, err := openFirecrackerCheckpoint(startConfig.CheckpointDir)
 	if err != nil {

@@ -107,7 +107,7 @@ type sandboxService struct {
 	runtimeDeleteTimeout              time.Duration
 	aclMu                             sync.Mutex
 	checkpointMu                      sync.Mutex
-	checkpointing                     map[string]struct{}
+	checkpointing                     map[string]string
 	firecrackerCheckpointMemorySlotMu sync.Mutex
 	firecrackerCheckpointMemorySlot   chan struct{}
 }

@@ -322,3 +322,69 @@ func TestManagedHostsPreserveBundleRelativeMountsAcrossRestore(t *testing.T) {
 	}
 	assertMounts(targetBundle)
 }
+
+func TestManagedHostsUserNamespaceDirectoryLifecycleRejected(t *testing.T) {
+	for _, namespacePath := range []string{"", "/proc/123/ns/user"} {
+		t.Run(namespacePath, func(t *testing.T) {
+			client := &hostsLifecycleClient{}
+			handler, start, bundle := hostsHandlerFixture(t, "remapped", client)
+			spec := handler.ociLoader.(staticOciLoader).spec
+			spec.Linux = &runtimecore.Linux{Namespaces: []runtimecore.LinuxNamespace{{Type: runtimecore.UserNamespace, Path: namespacePath}}, UIDMappings: []runtimecore.LinuxIDMapping{{ContainerID: 0, HostID: 100000, Size: 65536}}, GIDMappings: []runtimecore.LinuxIDMapping{{ContainerID: 0, HostID: 100000, Size: 65536}}}
+			err := handler.Start(context.Background(), start)
+			if err == nil || !strings.Contains(err.Error(), "explicit user namespace") {
+				t.Fatalf("unsafe fresh initialization accepted: %v", err)
+			}
+			if client.created.ID != "" {
+				t.Fatal("runtime reached before namespace rejection")
+			}
+			if _, err := os.Stat(filepath.Join(bundle, runtimecore.RootfsSeedName)); !os.IsNotExist(err) {
+				t.Fatalf("fresh seed persisted: %v", err)
+			}
+
+			// A valid checkpoint must not be mutated when the requested final gofer
+			// view cannot preserve its parent metadata.
+			sourceClient := &hostsLifecycleClient{}
+			source, fresh, sourceBundle := hostsHandlerFixture(t, "source", sourceClient)
+			if err := source.Start(context.Background(), fresh); err != nil {
+				t.Fatal(err)
+			}
+			seedPath := filepath.Join(sourceBundle, runtimecore.RootfsSeedName)
+			before, err := os.ReadFile(seedPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, err := runtimecore.ReadManagedHostsState(sourceBundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = prepareRestoredManagedHosts(bundle, spec, runtimecore.StartConfig{CheckpointDir: sourceBundle, ManagedHosts: saved})
+			if err == nil || !strings.Contains(err.Error(), "explicit user namespace") {
+				t.Fatalf("unsafe restore accepted: %v", err)
+			}
+			after, err := os.ReadFile(seedPath)
+			if err != nil || string(before) != string(after) {
+				t.Fatalf("input seed changed: %v", err)
+			}
+
+			// A direct EROFS view uses image IDs. If a provider later converts it
+			// to a host directory, finalization must recheck the actual root type.
+			spec.Annotations = map[string]string{runtimecore.GVisorRootfsAnnotationPrefix + "type": "erofs", runtimecore.GVisorRootfsAnnotationPrefix + "source": "/image.erofs"}
+			if err := validateManagedHostsSpec(saved, spec); err != nil {
+				t.Fatalf("direct EROFS rejected: %v", err)
+			}
+			spec.Annotations = nil
+			if err := finalizeManagedHosts(bundle, spec, saved); err == nil || !strings.Contains(err.Error(), "explicit user namespace") {
+				t.Fatalf("directory fallback accepted: %v", err)
+			}
+
+			for _, layout := range []runtimecore.HostsLayout{runtimecore.HostsLayoutExternal, runtimecore.HostsLayoutLegacy} {
+				mounted := &runtimecore.ManagedHostsState{Version: runtimecore.ManagedHostsVersion, Runtime: "runsc", Layout: layout, RootReadonly: layout == runtimecore.HostsLayoutLegacy}
+				spec.Root.Readonly = mounted.RootReadonly
+				spec.Mounts = []runtimecore.Mount{{Destination: "/etc/hosts", Type: "bind", Source: "/approved/hosts"}}
+				if err := validateManagedHostsSpec(mounted, spec); err != nil {
+					t.Fatalf("existing mounted layout rejected: %v", err)
+				}
+			}
+		})
+	}
+}

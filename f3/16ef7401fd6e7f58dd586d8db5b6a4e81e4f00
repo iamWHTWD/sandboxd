@@ -1,0 +1,38 @@
+pkg/resourcemanager/module.go
+  s_880b4270876978::t_d695e9d2e58b2a 185-194
+pkg/resourcemanager/parent_memory_metrics.go
+  s_880b4270876978::t_d695e9d2e58b2a 1-24,26-61,66-100
+  s_880b4270876978::t_40be3a71b2dedb 25,62-65
+pkg/resourcemanager/parent_memory_metrics_test.go
+  s_880b4270876978::t_40be3a71b2dedb 25,158-159,161,174-175,177,211-212,214,270,273-342
+  s_880b4270876978::t_bc3c0e034c36f1 1-24,26-157,160,162-173,176,178-210,213,215-269,271-272,343
+doc/node-memory-limit.md
+  s_880b4270876978::t_f6d1fb8e3d3ed3 46-63
+  s_880b4270876978::t_00d52a21f86aad 45
+AGENTS.md
+  s_880b4270876978::t_f6d1fb8e3d3ed3 92-95
+pkg/cgroupmanager/parent_memory.go
+  s_880b4270876978::t_78e98529f5cc6f 1-115
+pkg/resourcemanager/metrics.go
+  s_880b4270876978::t_d695e9d2e58b2a 105,337
+pkg/cgroupmanager/parent_memory_test.go
+  s_880b4270876978::t_78e98529f5cc6f 1-214
+internal/server/server.go
+  s_880b4270876978::t_f6d1fb8e3d3ed3 887
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f316ef7401fd6e7f58dd586d8db5b6a4e81e4f00",
+  "prompts": {},
+  "sessions": {
+    "s_880b4270876978": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a12e08-acf1-7402-b1a2-8732163df82d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+internal/server/memory_limit_test.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 25-29,34,36,38-42,44-55,57
+pkg/cgroupmanager/root_memory_limit_test.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 44,52,55-59,61,76,88,90,93,98-99,103,105-106,138-142,146-170,174,177-178,180-181,183-186,189,192,195,198,204-205,218,233,239-240,247
+  s_cf403ffb478f84::t_7ebf8bb7d0c618 143-145
+config/config.go
+  s_cf403ffb478f84::t_6012c065e01a5d 259-261,263-296
+pkg/resourcemanager/module.go
+  s_cf403ffb478f84::t_c74d31aaf6fb24 121,126-128,145
+configs/sandboxd.toml
+  s_cf403ffb478f84::t_6012c065e01a5d 55,57,60
+pkg/cgroupmanager/cgroup.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 46-50,100,102-103,425-426,481-496
+pkg/imagemanager/module.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 175
+pkg/resourcemanager/memory_limit_test.go
+  s_cf403ffb478f84::t_c74d31aaf6fb24 63,72,74,81,86,98,109,118,120,124-126,142,152-153,158,161-165,183,203,215,219,226-227,234
+pkg/cgroupmanager/root_memory_limit.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 31,33,35,39,43,45-47,49-50,55,57-58,60-61,63,66,69,76,79,82-84
+internal/server/server.go
+  s_cf403ffb478f84::t_b294cfe4ce129d 686-688,690,723,867,873,879
+doc/node-memory-limit.md
+  s_cf403ffb478f84::t_6012c065e01a5d 3,8-11,14,20,22,26-36,38,44,50,56-59,61,63
+config/memory_limit_test.go
+  s_cf403ffb478f84::t_6012c065e01a5d 1-48,50-80
+  s_cf403ffb478f84::t_6d45b8000aa4eb 49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8e3b985f23cd88264efc104e71fa05251bf170c1",
+  "prompts": {},
+  "sessions": {
+    "s_cf403ffb478f84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1353b-de9a-7753-b859-40307256dd1b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

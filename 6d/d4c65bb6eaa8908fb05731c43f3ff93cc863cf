@@ -1,0 +1,39 @@
+pkg/cgroupmanager/cgroup.go
+  s_12eb77bd9ec1bc::t_0aa2ac1da98414 70,192-202,578-581
+internal/server/server.go
+  s_12eb77bd9ec1bc::t_5da74cab093091 339,360-366,372-380,382-383,394-398,542-543,548,555,561-565,571-573
+  s_12eb77bd9ec1bc::t_0aa2ac1da98414 566-570
+  s_12eb77bd9ec1bc::t_566151c6d1b872 574
+pkg/sandbox/manager_test.go
+  s_12eb77bd9ec1bc::t_07f54c05a362d9 26,270-278,283-290,297-299
+  s_12eb77bd9ec1bc::t_ecfb7ffbe1cfa5 279-282
+  s_12eb77bd9ec1bc::t_ef88f0d68ae1e9 291-296
+  s_12eb77bd9ec1bc::t_316fb2fbcb2beb 300-301
+pkg/cgroupmanager/ops_test.go
+  s_12eb77bd9ec1bc::t_0aa2ac1da98414 18,26,34,737-840
+internal/server/server_test.go
+  s_12eb77bd9ec1bc::t_7e7b84568a1319 720,722-724,741,747-749,753-762
+  s_12eb77bd9ec1bc::t_8c30c15e48113d 555,561-564,669-671,673-712,714-719,721,725-740,742-746,750-752
+  s_12eb77bd9ec1bc::t_1db823e6cf8700 551-554,672,713
+  s_12eb77bd9ec1bc::t_0aa2ac1da98414 19,24,26,29,36,46,512,521,763-853
+  s_12eb77bd9ec1bc::t_9e3b33cb8f2d9f 20,37
+  s_12eb77bd9ec1bc::t_02fd631f83082d 854
+pkg/sandbox/manager.go
+  s_12eb77bd9ec1bc::t_07f54c05a362d9 885-887
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6dd4c65bb6eaa8908fb05731c43f3ff93cc863cf",
+  "prompts": {},
+  "sessions": {
+    "s_12eb77bd9ec1bc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a12f19-54fd-7f73-8c69-dc8ce5c94dcc",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

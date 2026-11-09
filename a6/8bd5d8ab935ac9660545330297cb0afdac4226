@@ -1,0 +1,58 @@
+internal/server/reboot_inventory.go
+  s_95e7e7d1d53e78::t_bf065bb9fea2c7 39-40
+  s_95e7e7d1d53e78::t_140fbb9743a1a8 1-22,24-25,28-37,43,54-77
+  s_95e7e7d1d53e78::t_32e2e9503ee1a3 38
+  s_95e7e7d1d53e78::t_e7ed683cf408cc 23,26-27,41-42,44-53
+internal/server/reboot_gate.go
+  s_95e7e7d1d53e78::t_140fbb9743a1a8 1-20,22-30,36-49,73-104,110-178,180-185,190-230
+  s_95e7e7d1d53e78::t_e7ed683cf408cc 21,50-72,105-109,179,186-189
+  s_95e7e7d1d53e78::t_04f1c123c06f4d 31-35
+internal/util/path.go
+  s_95e7e7d1d53e78::t_e7ed683cf408cc 53,57,68-69
+pkg/sandbox/runtime_health.go
+  s_95e7e7d1d53e78::t_76801482dc083f 84-85,87-89,94-96,127,150,154,170
+  s_95e7e7d1d53e78::t_15aa0f4dd85239 8,19-20,86,90-93,146-149,151-153,155-166
+internal/server/reboot_gate_test.go
+  s_95e7e7d1d53e78::t_76801482dc083f 6,35,75-97,104,112-113,115,123-126,130-133
+  s_95e7e7d1d53e78::t_bf065bb9fea2c7 1-5,7-11,13-34,36-74,111,114,116-122,134
+  s_95e7e7d1d53e78::t_13d3d9221a2712 12,98-103,105-110,127-129
+pkg/sandbox/runtime_health_test.go
+  s_95e7e7d1d53e78::t_76801482dc083f 26-57
+internal/server/server.go
+  s_95e7e7d1d53e78::t_e7ed683cf408cc 24,71,105,782-790,899,1220-1226
+pkg/sandbox/manager.go
+  s_95e7e7d1d53e78::t_76801482dc083f 96
+doc/checkpoint-restore.md
+  s_95e7e7d1d53e78::t_140fbb9743a1a8 512
+  s_95e7e7d1d53e78::t_6c003f9bf3ee0e 511
+cmd/sandboxd/main.go
+  s_95e7e7d1d53e78::t_16f23648111efc 94-102,136-138
+cmd/sandboxd/reboot_socket.go
+  s_95e7e7d1d53e78::t_d60b7120544075 1-85
+cmd/sandboxd/reboot_socket_test.go
+  s_95e7e7d1d53e78::t_9317bea208fec3 1-42
+internal/server/checkpoint.go
+  s_95e7e7d1d53e78::t_d58c3c23c27f51 43-48
+pkg/cgroupmanager/lease.go
+  s_95e7e7d1d53e78::t_5fdd44ecef6adc 20-21,26-54
+pkg/cgroupmanager/reboot_inventory_test.go
+  s_95e7e7d1d53e78::t_024dda60f4adc0 1-48
+pkg/runtime/firecracker/checkpoint_cgroup.go
+  s_95e7e7d1d53e78::t_482f1fbd1546d3 73-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a68bd5d8ab935ac9660545330297cb0afdac4226",
+  "prompts": {},
+  "sessions": {
+    "s_95e7e7d1d53e78": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1bf2f-18be-7893-9a1e-c8c4d6e4516b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

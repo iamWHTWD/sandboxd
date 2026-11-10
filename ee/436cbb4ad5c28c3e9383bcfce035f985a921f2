@@ -1,0 +1,46 @@
+doc/checkpoint-restore.md
+  s_95e7e7d1d53e78::t_b73f9933814107 512-525
+  s_95e7e7d1d53e78::t_e7fc29a09466f8 511,526
+internal/server/reboot_gate_test.go
+  s_95e7e7d1d53e78::t_828548f4c5049c 114-115
+  s_95e7e7d1d53e78::t_b73f9933814107 5,8,100-113,116-137
+  s_95e7e7d1d53e78::t_1fb57fc8d0b6c2 153,175-178
+  s_d30d7c72c9bd0f::t_97a5be58ff27fb 138-139
+pkg/cgroupmanager/ops_test.go
+  s_95e7e7d1d53e78::t_1fb57fc8d0b6c2 68-69
+internal/server/reboot_gate.go
+  s_95e7e7d1d53e78::t_b73f9933814107 13,129,140,142,152,167-168
+pkg/cgroupmanager/lease.go
+  s_95e7e7d1d53e78::t_1fb57fc8d0b6c2 26-32,37,40
+internal/server/reboot_inventory.go
+  s_95e7e7d1d53e78::t_1fb57fc8d0b6c2 45-47
+test/e2e/e2e-run.sh
+  s_95e7e7d1d53e78::t_828548f4c5049c 677-684,697,699-700,702-707,709-712,714-715,2795,2797-2803,2805-2807
+  s_95e7e7d1d53e78::t_46e042a34c1cce 685-696,701,708
+  s_95e7e7d1d53e78::t_e7fc29a09466f8 698,713
+  s_95e7e7d1d53e78::t_eb8a86ee0f3809 2796
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ee436cbb4ad5c28c3e9383bcfce035f985a921f2",
+  "prompts": {},
+  "sessions": {
+    "s_95e7e7d1d53e78": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1bf2f-18be-7893-9a1e-c8c4d6e4516b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    },
+    "s_d30d7c72c9bd0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a185c4-700d-7943-93ba-7afc7f48005b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

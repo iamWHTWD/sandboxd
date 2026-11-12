@@ -1,0 +1,25 @@
+api/runtime/v1/sandbox-api.proto
+  s_d30d7c72c9bd0f::t_e33d32b696c33b 276-277
+internal/server/server_test.go
+  s_d30d7c72c9bd0f::t_e33d32b696c33b 92-152
+internal/server/server.go
+  s_d30d7c72c9bd0f::t_e33d32b696c33b 1183-1206,1603
+api/runtime/v1/sandbox-api.pb.go
+  s_d30d7c72c9bd0f::t_50faeb8c9084f3 1416-1419,1606-1612,3045,3071-3072
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e5ad9e3e01859b68b6dbbeeebd4a9922d7ac8283",
+  "prompts": {},
+  "sessions": {
+    "s_d30d7c72c9bd0f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a185c4-700d-7943-93ba-7afc7f48005b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

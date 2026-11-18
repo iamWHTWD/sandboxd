@@ -1,0 +1,33 @@
+pkg/imagemanager/nydus/bootstrap.go
+  s_06c609ee11e7d6::t_6cf0d643512db8 128,146,169-176,178-179,181-188,192,194-206
+pkg/imagemanager/nydus/registry.go
+  s_06c609ee11e7d6::t_61031fbc829ff4 292-297
+  s_06c609ee11e7d6::t_6cf0d643512db8 22,39-40,53-55,119-121,123,140,142-145,153-160,163,169-171,187,193-199,202-204,210,214,217-224,244-247,252,255,257-284
+  s_06c609ee11e7d6::t_393078d51547c5 248-251,253-254,256,285
+pkg/imagemanager/nydus/registry_test.go
+  s_06c609ee11e7d6::t_61031fbc829ff4 188-406
+  s_06c609ee11e7d6::t_454e31cf1e3dce 408,421,429,432,434-435,440-441,443-470,475-476
+  s_06c609ee11e7d6::t_a6b5e60cdd489e 64-70,118-122,163-167
+  s_06c609ee11e7d6::t_3ea6e69be953a9 18-19,21,24,26-29,31-32,36-37,40-41,43-45,183-187,407,409-420,422-428,430-431,433,436-439,442,471-474
+pkg/imagemanager/nydus/bootstrap_cache_test.go
+  s_06c609ee11e7d6::t_a6b5e60cdd489e 44
+pkg/imagemanager/imageregistry/registry.go
+  s_06c609ee11e7d6::t_6cf0d643512db8 170-173,215-217,242-244,252,286-290,303-342
+  s_06c609ee11e7d6::t_d377c668a3bd09 343
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0971adec498680439704e7721e9e3f30c2c7a416",
+  "prompts": {},
+  "sessions": {
+    "s_06c609ee11e7d6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e558-49c6-7583-bfb0-5ccb6df75766",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+pkg/imagemanager/nydus/registry.go
+  s_06c609ee11e7d6::t_ed20a304683ba5 25,141-147,201,206,209-213,268-301
+  s_06c609ee11e7d6::t_7e21c0f1ecef31 302
+pkg/imagemanager/nydus/registry_test.go
+  s_06c609ee11e7d6::t_cd534d2f08ed7c 197,219-221,225-227,303-308,438-450,459,461-522
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cabe69dfd313dc9cc0b8e9408a33021227433e20",
+  "prompts": {},
+  "sessions": {
+    "s_06c609ee11e7d6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e558-49c6-7583-bfb0-5ccb6df75766",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+pkg/resourcemanager/online_cgroup_test.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 24,158-161,163-194,197,199-201,204-228
+pkg/resourcemanager/host_memory.go
+  s_8d737ed233a6d7::t_bbf43a4e311f40 113
+pkg/resourcemanager/host_memory_test.go
+  s_8d737ed233a6d7::t_bbf43a4e311f40 121-122,127,131
+  s_8d737ed233a6d7::t_2efbd3e79026f9 22,132-153
+pkg/resourcemanager/cgroupv1/cpu.go
+  s_8d737ed233a6d7::t_3d230550e824a0 45-47
+pkg/cgroupmanager/ops_test.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 656-663
+doc/node-memory-metrics.md
+  s_8d737ed233a6d7::t_0afde7bded8c45 5,17,24-25
+pkg/resourcemanager/online_cgroup.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 60-61
+  s_8d737ed233a6d7::t_3d230550e824a0 89,91-93,96,98,100,102-105,107,122,126-127,129,131,144,168,176,180-183,189-190,216,229,252-253,276
+pkg/cgroupmanager/lease.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 23,157-158,161-169,173
+pkg/resourcemanager/module.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 498
+  s_8d737ed233a6d7::t_bbf43a4e311f40 84-86,248,273-274,276-277,281,340-344,347,354-366,384-385,401-402,465,503,506,512,514,535-536
+pkg/cgroupmanager/ops_v2.go
+  s_8d737ed233a6d7::t_0afde7bded8c45 190,207-215
+  s_8d737ed233a6d7::t_8a738e3fdd0d27 216-217
+pkg/resourcemanager/module_test.go
+  s_8d737ed233a6d7::t_bbf43a4e311f40 157,174
+  s_8d737ed233a6d7::t_0afde7bded8c45 272-291
+pkg/resourcemanager/online_provider.go
+  s_8d737ed233a6d7::t_3d230550e824a0 21,62,81,103,106-107,109,111-112,114-115,117,119-128,130-140,144-148
+  s_8d737ed233a6d7::t_0afde7bded8c45 25,85-86
+pkg/resourcemanager/cgroupv1/memory.go
+  s_8d737ed233a6d7::t_3d230550e824a0 55-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "07ac4eb0bd1a922549b22dd05d1d65db12801a75",
+  "prompts": {},
+  "sessions": {
+    "s_8d737ed233a6d7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e32f-a4e0-73f0-a1e2-0b57b29e895b",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

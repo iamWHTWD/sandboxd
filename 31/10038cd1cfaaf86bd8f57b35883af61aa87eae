@@ -1,0 +1,44 @@
+pkg/resourcemanager/module.go
+  s_8d737ed233a6d7::t_471a174e95b865 51-53,64-74,82-90,92-97,127,220-241,281-284,335-337,343-367,462-465,468-471,473-474,478-507,509-552,555-560,564-574
+pkg/resourcemanager/module_test.go
+  s_8d737ed233a6d7::t_2387c2d1c8aa44 20,32-36,45-126,204-207,209-214,256-258,260,274-529
+pkg/cgroupmanager/ops_v2.go
+  s_8d737ed233a6d7::t_155fc56a074b6f 180-183,185-194,203-206,208,212-222,225,227-231
+internal/server/server.go
+  s_8d737ed233a6d7::t_086fc06fe34ebd 50,962-977,1077
+pkg/cgroupmanager/ops_test.go
+  s_8d737ed233a6d7::t_dafc6554202937 285-288,562-666
+pkg/cgroupmanager/ops.go
+  s_8d737ed233a6d7::t_c92079e4f63e4f 85
+pkg/resourcemanager/k8s_watch.go
+  s_8d737ed233a6d7::t_fce84e0cbde91d 19,33-36,39-40,56-63,135-137,146-148,151-153,158-160,166-168,186,215,220-230,236-250,254-257,266-269,273,279-280,283-293,305-308,312,318-319,322-332,341-350,570-577
+doc/node-memory-metrics.md
+  s_8d737ed233a6d7::t_c306d9c58962bc 10-23
+pkg/resourcemanager/k8s_watch_test.go
+  s_8d737ed233a6d7::t_4b17c38df35de1 18-21,26,30,32-33,321-329,367-568
+pkg/cgroupmanager/memory_v1.go
+  s_8d737ed233a6d7::t_6cc493a4b9f090 1-123
+pkg/cgroupmanager/lease.go
+  s_8d737ed233a6d7::t_0141a22ed336f4 139-169
+  s_8d737ed233a6d7::t_91137b3f546e62 23-24
+pkg/cgroupmanager/memory_v1_test.go
+  s_8d737ed233a6d7::t_5797fb30f939de 1-394
+pkg/cgroupmanager/ops_v1.go
+  s_8d737ed233a6d7::t_9be97b9309e03c 51,145-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3110038cd1cfaaf86bd8f57b35883af61aa87eae",
+  "prompts": {},
+  "sessions": {
+    "s_8d737ed233a6d7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e32f-a4e0-73f0-a1e2-0b57b29e895b",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}

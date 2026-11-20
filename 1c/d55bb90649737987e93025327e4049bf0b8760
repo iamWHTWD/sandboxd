@@ -1,0 +1,83 @@
+config/config.go
+  s_8d737ed233a6d7::t_4b56ac4cc53a36 112-114,116-118
+configs/sandboxd.toml
+  s_8d737ed233a6d7::t_fd01621726e150 161-162,164-165
+internal/server/server.go
+  s_8d737ed233a6d7::t_6e5e5c94eb944b 827-830,835-841
+pkg/resourcemanager/cgroup_test.go
+  s_8d737ed233a6d7::t_31c91dd2d536bd 235-237
+pkg/resourcemanager/cgroupv1/cgroup.go
+  s_8d737ed233a6d7::t_ec464a86479636 1-94
+pkg/resourcemanager/cgroupv1/cpu.go
+  s_8d737ed233a6d7::t_13745cabd646b3 1-58
+pkg/resourcemanager/cgroupv1/cpu_test.go
+  s_8d737ed233a6d7::t_5db3f19c45d638 1-38
+pkg/resourcemanager/cgroupv1/cpuacct.go
+  s_8d737ed233a6d7::t_51c16f271ba04e 1-196
+pkg/resourcemanager/cgroupv1/cpuacct_test.go
+  s_8d737ed233a6d7::t_42d0fd33a58f90 1-606
+pkg/resourcemanager/cgroupv1/cpuset.go
+  s_8d737ed233a6d7::t_d1562789829b10 1-93
+pkg/resourcemanager/cgroupv1/cpuset_test.go
+  s_8d737ed233a6d7::t_904fa8e322ac61 1-73
+pkg/resourcemanager/cgroupv1/memory.go
+  s_8d737ed233a6d7::t_7be548e2688792 1-79
+pkg/resourcemanager/cgroupv1/memory_test.go
+  s_8d737ed233a6d7::t_de7dcfaeb41484 1-34
+pkg/resourcemanager/cgroupv1/pids.go
+  s_8d737ed233a6d7::t_856ffe41f6017a 1-45
+pkg/resourcemanager/cgroupv1/pids_test.go
+  s_8d737ed233a6d7::t_bc970e8c81b5fc 1-30
+pkg/resourcemanager/cgroupv1/testdata/a/cpu.cfs_quota_us
+  s_8d737ed233a6d7::t_7219e14a4dc8c2 1
+pkg/resourcemanager/cgroupv1/testdata/a/memory.stat
+  s_8d737ed233a6d7::t_ba44f388002691 1-9
+pkg/resourcemanager/cgroupv1/testdata/b/cpu.cfs_period_us
+  s_8d737ed233a6d7::t_f089c85b9e360c 1
+pkg/resourcemanager/cgroupv1/testdata/b/cpu.cfs_quota_us
+  s_8d737ed233a6d7::t_da1c52f9ccdb9a 1
+pkg/resourcemanager/cgroupv1/testdata/cpu.cfs_period_us
+  s_8d737ed233a6d7::t_c5726f01a56812 1
+pkg/resourcemanager/cgroupv1/testdata/cpu.cfs_quota_us
+  s_8d737ed233a6d7::t_6a2f585947a672 1
+pkg/resourcemanager/cgroupv1/testdata/cpu.shares
+  s_8d737ed233a6d7::t_2af11a18298109 1
+pkg/resourcemanager/cgroupv1/testdata/cpuacct.usage
+  s_8d737ed233a6d7::t_c770be0883e2c7 1
+pkg/resourcemanager/cgroupv1/testdata/cpuset.cpus
+  s_8d737ed233a6d7::t_c579a301cd05f2 1
+pkg/resourcemanager/cgroupv1/testdata/memory.stat
+  s_8d737ed233a6d7::t_70e1020deea7c0 1-36
+pkg/resourcemanager/cgroupv1/testdata/pids.current
+  s_8d737ed233a6d7::t_cffd0dfb159472 1
+pkg/resourcemanager/manager.go
+  s_8d737ed233a6d7::t_08aae956711d53 30-32,35-40,104-105,108,112,119-132,137-138,144-145
+pkg/resourcemanager/module.go
+  s_8d737ed233a6d7::t_36efe0447f6809 92-97
+pkg/resourcemanager/online_cgroup.go
+  s_8d737ed233a6d7::t_f13fb21c31226c 1-350
+pkg/resourcemanager/online_cgroup_test.go
+  s_8d737ed233a6d7::t_79073354ff675a 1-246
+pkg/resourcemanager/online_provider.go
+  s_8d737ed233a6d7::t_e34a388f639dc1 1-168
+pkg/resourcemanager/sysutils/meminfo.go
+  s_8d737ed233a6d7::t_bc77dbd6b98acb 1-70
+pkg/resourcemanager/sysutils/meminfo_test.go
+  s_8d737ed233a6d7::t_1976d530009908 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1cd55bb90649737987e93025327e4049bf0b8760",
+  "prompts": {},
+  "sessions": {
+    "s_8d737ed233a6d7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e32f-a4e0-73f0-a1e2-0b57b29e895b",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "wanghongtao.wangho <wanghongtao.wangho@antgroup.com>"
+    }
+  }
+}
